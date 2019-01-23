@@ -18,7 +18,7 @@ var chatRoom = {
 /* ------------------------	*/
 
 window.addEventListener('load', function() {
-	server = io.connect('https://vps332892.ovh.net:4000');
+	server = io.connect('https://' + location.hostname + ':4000');
 
 	var controlDiv = document.getElementById('control');
 

@@ -108,13 +108,12 @@ var init = function(user) {
 				//var sessions = session.getUserSessions(user);
 
 				var sendMsg = lib.filterGroupData(group);
-				sendMsg.status = 'success';
 
 				// let user know the new group for contact
 				for (var i = 0; i < sessions.length; i++) {
 					var s = sessions[i];
 
-					s.emit('joinContactChat', sendMsg);
+					s.emit('joinContactChat', {status: 'success', group: sendMsg});
 				}
 
 				callback(null);
@@ -160,7 +159,7 @@ var init = function(user) {
 	});
 
 	// TODO: max(messageId) + 1 is not alway true, because when user exits
-	//       messages of the users are removed
+	//       messages of the users are removed -> let messages stay even if the user who sent the messgage has left
 	// store message in database and broadcast to all other users
 	user.on('sendMessage', function(data) {
 		if (!session.validateRequest('sendMessage', user, true, data))
@@ -222,6 +221,7 @@ var init = function(user) {
 				if (result.affectedRows == 0)
 					return callback(new Error('Failed to save in database'));
 				
+				//TODO: put this process into background so that send message processing completes quickly
 				this.db.incrementNbNewMessagesOthers({groupId: groupId, userId: user.userId},
 						callback);
 			},

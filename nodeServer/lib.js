@@ -157,6 +157,11 @@ var recursion = function(cond, main, callback) {
 	new recursionConstructor(main, cond, callback).start();
 };
 
+var debug = function(message) {
+	if (process.env.DEBUG)
+		console.log(message);
+}
+
 module.exports = {filterUserData: filterUserData,
 		filterUsersData: filterUsersData,
 		filterGroupData: filterGroupData,
@@ -167,7 +172,8 @@ module.exports = {filterUserData: filterUserData,
 		isArray: isArray,
 		isDate: isDate,
 		containsUser: containsUser,
-		recursion: recursion};
+		recursion: recursion,
+		debug: debug};
 
 if (require.main == module) {
 	

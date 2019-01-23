@@ -97,12 +97,17 @@ var init = function(user) {
 				var i = 0;
 				if (sessions) {
 					sessions.forEach(function(session) {
-						if (session.userId == peer.userId)
-							session.emit('newPendingContact', user.getUserInfo());
-						else if (session.userId == user.userId)
-							session.emit('newPendingContact', lib.filterUserData(peer));
-						else
+						if (session.userId == peer.userId) {
+							var jsonResult = user.getUserInfo();
+							jsonResult.invited = 1;
+							session.emit('newPendingContact', {status: 'success', contact: jsonResult});
+						} else if (session.userId == user.userId) {
+							var jsonResult = lib.filterUserData(peer);
+							jsonResult.invited = 0;
+							session.emit('newPendingContact', {status: 'success', contact: jsonResult});
+						} else {
 							throw new Error('bad session');
+						}
 						
 						i++;
 						if (i == sessions.length)
@@ -341,16 +346,16 @@ var reactPendingContact = function(data, callback) {
 					if (session.userId == peerId) {
 						
 						if (accept)
-							session.emit('newContact', user.getUserInfo());
+							session.emit('newContact', {status:'success', contact: user.getUserInfo()});
 						else
-							session.emit('contactDenied', user.getUserInfo());
+							session.emit('contactDenied', {status:'success', contact: user.getUserInfo()});
 						
 					} else if(session.userId == user.userId) {
 						
 						if (accept)
-							session.emit('newContact', lib.filterUserData(peer));
+							session.emit('newContact', {status:'success', contact: lib.filterUserData(peer)});
 						else
-							session.emit('contactDenied', lib.filterUserData(peer));
+							session.emit('contactDenied', {status:'success', contact: lib.filterUserData(peer)});
 						
 					} else
 						throw new Error('bad session');

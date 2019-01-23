@@ -291,7 +291,7 @@ var queries = {
 
 	addUser: "INSERT INTO Accounts(email, password, login, nickname) VALUES(?)",
 
-	addSession: "INSERT INTO Sessions(sessionId, accountId, expire) VALUES(?)",
+	addSession: "INSERT INTO Sessions(sessionId, accountId, expires) VALUES(?)",
 
 	addContact: "INSERT INTO Contacts SET ?",
 
@@ -341,6 +341,8 @@ var queries = {
 	removeEvent: "DELETE FROM Events WHERE id = ? ",
 
 	removeEventParticipant: "DELETE FROM EventParticipants WHERE eventId = ? and accountId = ? ",
+	
+	removeSession: "DELETE FROM Sessions WHERE sessionId = ? ",
 
 	acceptPendingContact: "UPDATE Contacts SET accepted = 1 " +
 			"WHERE ((accountId = ? and accountId2 = ?) or (accountId2 = ? and accountId = ?)) and " +
@@ -372,6 +374,8 @@ var queries = {
 			
 	updateEventParticipantAck: "UPDATE EventParticipants SET acked = ? " +
 			"WHERE eventId = ? and accountId = ? ",
+			
+	updateSessionExpire: "UPDATE Sessions SET expires = ? where sessionId = ? ",
 
 	lastInsertId: "SELECT LAST_INSERT_ID() as lastInsertId"
 };
@@ -621,6 +625,10 @@ var dbPrototype = {
 		this.conn.query(queries.removeEventParticipant,
 				[data.eventId, data.userId], callback);
 	},
+	removeSession: function(data, callback)  {
+		this.conn.query(queries.removeSession,
+				[data.sessionId], callback);
+	},
 	acceptPendingContact: function(data, callback) {
 		this.conn.query(queries.acceptPendingContact,
 				[data.userId, data.userId2, data.userId, data.userId2], callback);
@@ -667,6 +675,10 @@ var dbPrototype = {
 		this.conn.query(queries.updateEventParticipantAck,
 				[data.acked, data.eventId, data.userId], callback);
 	},
+	updateSessionExpire: function(data, callback) {
+		this.conn.query(queries.updateSessionExpire,
+				[data.expire, data.sessionId], callback);
+	},
 	lastInsertId: function(callback)  {
 		this.conn.query(queries.lastInsertId, callback);
 	},
@@ -682,6 +694,7 @@ var getConnection = function(callback) {
 	pool.getConnection(function(err, conn) {
 		if (err) {
 			console.log('Failed to get db connection');
+			console.log(err);
 			Object.defineProperty(dbInstance, 'conn',
 					{value: null, configurable: false, writable: false, enumerable: false});
 		} else {

@@ -8,13 +8,13 @@ CREATE TABLE Accounts (
     password char(64) NOT NULL,                /* password hash string */
     lastSeen timestamp NOT NULL,
     picture varchar(32),                       /* Profile picture file name */
-    login char(64) NOT NULL,
+    login char(64) NOT NULL DEFAULT 'NO',
     CONSTRAINT Accounts_pk PRIMARY KEY (id)
 );
 
 -- Session data for users
 CREATE TABLE Sessions (
-    sessionId char(32) NOT NULL,
+    sessionId char(40) NOT NULL,                /* Session id generated with SHA-1 random hash value */
     accountId int NOT NULL,
     expires timestamp,
     CONSTRAINT Sessions_pk PRIMARY KEY (sessionId)

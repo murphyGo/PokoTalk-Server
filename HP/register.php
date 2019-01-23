@@ -44,6 +44,7 @@ if (isset($_POST['signup'])) {
             $successmsg = "Successfully Registered! <a href='login.php'>Click here to Login</a>";
         } else {
             $errormsg = "Error in registering...Please try again later!";
+            $errormsg .= "<br>Error description: " . mysqli_error($con);
         }
 
     }

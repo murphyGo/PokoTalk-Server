@@ -175,7 +175,6 @@ var chatRoomProto = {
 				if (err) {
 					errSessions.push(user);
 				} else {
-					errSessions.push(user);
 					onlineMembers.push(user);
 					user.chatRooms.push(chatRoom);
 					
