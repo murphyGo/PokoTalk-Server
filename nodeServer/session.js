@@ -11,7 +11,8 @@ var users;
 
 var userState = {
 	LOGOUT: 0,
-	LOGIN: 1
+	LOGING: 1,
+	LOGIN: 2
 };
 
 var hashRound = 10;
@@ -23,7 +24,7 @@ function init(user) {
 	user.on('registerAccount', function(data) {
 		if (logined(user)) {
 			lib.debug('user ' + user.email + ' is already logined');
-			return callback(new Error('already logined'));
+			return;
 		}
 		
 		var name = data.name;
@@ -69,6 +70,11 @@ function init(user) {
 	
 	//TODO: vulnerability, attacker may send big amount of this event to attack database
 	user.on('passwordLogin', function(data) {
+		if (logined(user)) {
+			lib.debug('user ' + user.email + ' is already logined');
+			return;
+		}
+		
 		var email = data.email;
 		var password = data.password;
 		
@@ -121,7 +127,13 @@ function init(user) {
 	});
 	
 	user.on('sessionLogin', function(data) {
+		if (user.login == userState.LOGING)
+			return user.emit('sessionLogin', {status:'fail', errorMsg: 'you\'re trying to login'});
+		if (user.login == userState.LOGIN)
+			return user.emit('sessionLogin', {status:'fail', errorMsg: 'you\'d logined already'});
+		
 		var sessionId = data.sessionId;
+		user.login = userState.LOGING;
 		lib.debug('user try to login with session id ' + sessionId);
 		
 		dbManager.trxPattern([
@@ -159,15 +171,18 @@ function init(user) {
 				if (result.affectedRows == 0)
 					return callback(new Error('Failed to update session expire date'));
 				
-				loginUser({user: user, userInfo: this.data.userInfo}, callback);
+				loginUser({user: user, userInfo: this.data.userInfo, db: this.db}, callback);
 			}
 		], function(err) {
-			if (err)
+			if (err) {
+				user.login = userState.LOGOUT;
 				return user.emit('sessionLogin', {status: 'fail', errorMsg: 'failed to login'});
-			
-			lib.debug('user logined with sessionId ' + sessionId);
-			user.emit('sessionLogin', {status: 'success', user: user.getUserInfo(),
-				sessionId: user.sessionId, sessionExpire: user.sessionExpire});
+			} else {
+				user.login = userState.LOGIN;
+				user.emit('sessionLogin', {status: 'success', user: user.getUserInfo(),
+					sessionId: user.sessionId, sessionExpire: user.sessionExpire});
+				lib.debug('user logined with sessionId ' + sessionId);
+			}
 		});
 	});
 	
@@ -183,11 +198,12 @@ function init(user) {
 			}
 		], function(err) {
 			if (err) {
-				lib.debug('user ' + user.email + ' failed to logout');
 				user.emit('logout', {status: 'fail', errorMsg: 'logout fail'});
+				lib.debug('user ' + user.email + ' failed to logout');
 			} else {
-				lib.debug('user ' + user.email + ' logout');
+				user.login = userState.LOGOUT;
 				user.emit('logout', {status: 'success'});
+				lib.debug('user ' + user.email + ' logout');
 			}
 		})
 	});
@@ -217,13 +233,13 @@ function init(user) {
 var loginUser = dbManager.composablePattern(function(pattern, oCallback) {
 	var user = this.data.user;
 	var userInfo = this.data.userInfo;
+	var db = this.data.db;
 	// login
 	user.userId = userInfo.id;
 	user.email = userInfo.email;
 	user.nickname = userInfo.nickname;
 	user.picture = userInfo.picture;
 	user.lastSeen = userInfo.lastSeen;
-	user.login = userInfo.login;
 	user.sessionId = userInfo.sessionId;
 	user.sessionExpire = userInfo.sessionExpire;
 	user.state = userState.LOGIN;
@@ -240,14 +256,11 @@ var loginUser = dbManager.composablePattern(function(pattern, oCallback) {
 	
 	pattern([
 		function(callback) {
-			contact.initUser(user, callback)
-		},
-		function(callback) {
 			// join every active group the user belongs to
-			chatManager.initUser(user, callback);
+			chatManager.initUser({user: user, db: db}, callback);
 		},
 		function(callback) {
-			event.initUser(user, callback);
+			event.initUser({user: user, db: db}, callback);
 		}
 	], 
 	function(err) {
@@ -260,11 +273,12 @@ var loginUser = dbManager.composablePattern(function(pattern, oCallback) {
 			console.log(user.email + ' joined groups');
 			return oCallback(null, user);
 		}
-	});
+	}, {db: db});
 });
 
 var logoutUser = dbManager.composablePattern(function(pattern, oCallback) {
 	var user = this.data.user;
+	var db = this.data.db;
 	
 	//TODO: leaving group chat and removing user session should work in callback pattern
 	//vulnerability: if leaving group fails and if user logins again, user may get messages
@@ -300,7 +314,7 @@ var logoutUser = dbManager.composablePattern(function(pattern, oCallback) {
 		} else {
 			return oCallback(null);
 		}
-	});
+	}, {db: db});
 });
 
 function logined(user) {

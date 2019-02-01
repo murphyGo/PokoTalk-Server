@@ -28,6 +28,8 @@ function init(user) {
 		if (!session.validateRequest('getGroupList', user, false))
 			return;
 		
+		lib.debug('get group list for ' + user.email);
+		
 		getGroupList({user: user, trx: true},
 			function(err, result) {
 				if (err) {	
@@ -129,15 +131,7 @@ function init(user) {
 				var contact = this.data.contact;
 				
 				if (contact) {
-					// notify two users of the contact
-					var sessions = session.getUsersSessions([{userId: contact.userId}, 
-						{userId: contact.userId2}]);
-					
-					for (var i = 0; i < sessions.length; i++) {
-						var contactUser = sessions[i];
-						
-						contactUser.emit('contactChatRemoved', {contactId: contact.contactId});
-					}
+					emitContactChatRemoved(groupId, contact);
 				}
 				
 				// get every session of every member
@@ -152,7 +146,7 @@ function init(user) {
 					if (invitedSessions.indexOf(userSession) >= 0)
 						userSession.emit('addGroup', {status: 'success', group: group});
 					else
-						userSession.emit('membersInvited', {groupId: group.groupId, 
+						userSession.emit('membersInvited', {status: 'success', groupId: group.groupId, 
 							members: lib.filterUsersData(invitedMembers)});
 				}
 				
@@ -590,15 +584,7 @@ var exitGroup = dbManager.composablePattern(function(pattern, callback) {
 			this.data.totalMembers = totalMembers;
 			
 			if (contact) {
-				// notify contact and the user
-				var sessions = session.getUsersSessions([{userId: contact.userId}, 
-					{userId: contact.userId2}]);
-				
-				for (var i = 0; i < sessions.length; i++) {
-					var contactUser = sessions[i];
-					
-					contactUser.emit('contactChatRemoved', {contactId: contact.contactId});
-				}
+				emitContactChatRemoved(groupId, contact);
 			}
 			
 			// notify remaining users
@@ -608,8 +594,8 @@ var exitGroup = dbManager.composablePattern(function(pattern, callback) {
 			for (var i = 0; i < totalSessions.length; i++) {
 				var userSession = totalSessions[i];
 				
-				userSession.emit('membersExit', {groupId: groupId, 
-					members: user.getUserInfo()});
+				userSession.emit('membersExit', {status:'success', groupId: groupId, 
+					members: [user.getUserInfo()]});
 			}
 			
 			// notify the user
@@ -681,6 +667,31 @@ var invalidateContactGroup = dbManager.composablePattern(function(pattern, callb
 });
 
 
+var emitContactChatRemoved = function(groupId, contact) {
+	if (contact == null)
+		return;
+	
+	// notify two users of the contact
+	var sessions = session.getUserSessions({userId: contact.userId})
+	var sessions2 = session.getUserSessions({userId: contact.userId2});
+	
+	for (var i = 0; i < sessions.length; i++) {
+		var contactUser = sessions[i];
+		
+		contactUser.emit('contactChatRemoved', {status: 'success', 
+			groupId: groupId, contactId: contact.contactId,
+			userId: contact.userId2});
+	}
+	
+	for (var i = 0; i < sessions2.length; i++) {
+		var contactUser = sessions2[i];
+		
+		contactUser.emit('contactChatRemoved', {status: 'success', 
+			groupId: groupId, contactId: contact.contactId,
+			userId: contact.userId});
+	}
+	
+}
 // create default group name
 var getDefaultGroupName = function(members) {
 	// create string of names 'a, b, c...'

@@ -290,9 +290,10 @@ function init(user) {
 	});
 }
 
-var initUser = function(user, callback) {
+var initUser = dbManager.composablePattern(function(pattern, callback) {
+	var user = this.data.user;
 
-	dbManager.trxPattern([
+	pattern([
 		function(callback) {
 			getEventList({userId: user.userId, db: this.db}, callback);
 		}
@@ -305,8 +306,8 @@ var initUser = function(user, callback) {
 		}
 
 		callback(err);
-	});
-};
+	}, {db: this.data.db});
+});
 
 // get event list of user
 var getEventList = dbManager.composablePattern(function(pattern, callback) {

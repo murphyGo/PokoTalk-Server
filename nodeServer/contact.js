@@ -216,34 +216,6 @@ var init = function(user) {
 	});
 }
 
-//init user when logined
-var initUser = function(user, callback) {
-	// when logined, user will get contact list
-	// automatically
-	dbManager.trxPattern([
-		function(callback) {
-			getAcceptedContactList({user: user, db: this.db}, 
-					callback);
-		},
-		function(contacts, callback) {
-			this.data.contacts = contacts;
-			
-			user.emit('getContactList', {status: 'success', contacts: contacts});
-			
-			callback(null);
-		}
-	],
-	function(err) {
-		if (err) {
-			console.log('failed to get contact list');
-			
-			callback(err);
-		} else {
-			callback(null);
-		}
-	});
-};
-
 var getAcceptedContactList = function(data, callback) {
 	var user = data.user
 	
@@ -374,8 +346,7 @@ var reactPendingContact = function(data, callback) {
 	{db: data.db});
 }
 
-module.exports = {init: init,
-		initUser: initUser};
+module.exports = {init: init,};
 
 var session = require('./session');
 var lib = require('./lib');

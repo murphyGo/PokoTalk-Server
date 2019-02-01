@@ -18,10 +18,12 @@ var init = function(user) {
 	user.on('joinContactChat', function(data) {
 		if (!session.validateRequest('joinContactChat', user, true, data))
 			return;
+		
+		var peerEmail = data.email;
 
 		dbManager.trxPattern([
 			function(callback) {
-				this.db.getUserByEmail({email: data.email, lock: true},
+				this.db.getUserByEmail({email: peerEmail, lock: true},
 						callback);
 			},
 			function(result, fields, callback) {
@@ -29,6 +31,7 @@ var init = function(user) {
 					return callback(new Error('no such user'));
 
 				var contactId = result[0].userId;
+				this.data.contactId = contactId;
 
 				this.db.getAcceptedContact({userId: user.userId,
 					userId2: contactId, lock: true}, callback);
@@ -40,6 +43,7 @@ var init = function(user) {
 				var contact = result[0];
 				var db = this.db;
 				var data = this.data;
+				this.data.contact = contact;
 
 				// groupId cannot be 0
 				if (contact.groupId) {
@@ -103,18 +107,13 @@ var init = function(user) {
 			},
 			function(callback) {
 				var group = this.data.group;
-				var sessions = session.getUsersSessions(this.data.resMembers);
+				//var sessions = session.getUsersSessions(this.data.resMembers);
+				
 				// For poor client, only notify request user
-				//var sessions = session.getUserSessions(user);
-
-				var sendMsg = lib.filterGroupData(group);
-
+				var contact = this.data.contact;
+				
 				// let user know the new group for contact
-				for (var i = 0; i < sessions.length; i++) {
-					var s = sessions[i];
-
-					s.emit('joinContactChat', {status: 'success', group: sendMsg});
-				}
+				emitJoinContactChat(group, contact);
 
 				callback(null);
 			}
@@ -132,7 +131,8 @@ var init = function(user) {
 			return;
 
 		var groupId = data.groupId;
-		var nbMessageMax = 100;
+		var nbMessageMax = data.nbMessageMax || 100;
+		nbMessageMax = nbMessageMax > 100 ? 100 : nbMessageMax;
 
 		dbManager.trxPattern([
 			function(callback) {
@@ -153,7 +153,7 @@ var init = function(user) {
 			if (err) {
 				user.emit('readMessage', {status: 'fail', errorMsg: 'server error'});
 			} else {
-				user.emit('readMessage', {status: 'success', messages: result});
+				user.emit('readMessage', {status: 'success', groupId: groupId, messages: result});
 			}
 		});
 	});
@@ -174,6 +174,8 @@ var init = function(user) {
 		// client defined id for the message
 		// used for identifying message sent feedback
 		var sendId = data.sendId;
+		if (sendId !== 0 && !sendId)
+			return;
 		
 		if (groupId !== groupId)
 			return;
@@ -235,7 +237,8 @@ var init = function(user) {
 				var data = this.data.message;
 				data.user = user;
 				
-				user.emit('sendMessage', {status: 'success', sendId: sendId, messageId: data.messageId, date:data.date});
+				user.emit('sendMessage', {status: 'success', sendId: sendId, messageId: data.messageId, date:data.date,
+					nbread: this.data.nbMembers - 1, groupId: groupId});
 				
 				// broadcast message
 				// TODO: optimization -> cache messageId so set nbread on server 
@@ -468,12 +471,13 @@ var init = function(user) {
 };
 
 // init user when logined
-var initUser = function(user, callback) {
+var initUser = dbManager.composablePattern(function(pattern, callback) {
+	var user = this.data.user;
 	user.chatRooms = [];
 
 	// when logined, user will get group list and
 	// automatically join all chatRooms
-	dbManager.trxPattern([
+	pattern([
 		function(callback) {
 			group.getGroupList({user: user, db: this.db}, callback);
 		},
@@ -525,8 +529,8 @@ var initUser = function(user, callback) {
 		} else {
 			callback(null);
 		}
-	});
-};
+	}, {db: this.data.db});
+});
 
 // user enter group chat invited before
 // it should be synchronous until user joins chat
@@ -740,6 +744,33 @@ var removeGroupChat = function(chatRoom) {
 
 	return true;
 };
+
+var emitJoinContactChat = function(group, contact) {
+	// For poor client, only notify request user
+	//var sessions = session.getUserSessions(user);
+
+	var sendMsg = lib.filterGroupData(group);
+	
+	var sessions = session.getUserSessions({userId: contact.userId});
+	var sessions2 = session.getUserSessions({userId: contact.userId2});
+
+	// let user know the new group for contact
+	for (var i = 0; i < sessions.length; i++) {
+		var s = sessions[i];
+
+		s.emit('joinContactChat', {status: 'success', 
+			contactId: contact.contactId, group: sendMsg,
+			userId: contact.userId2});
+	}
+	
+	for (var i = 0; i < sessions2.length; i++) {
+		var s = sessions2[i];
+
+		s.emit('joinContactChat', {status: 'success', 
+			contactId: contact.contactId, group: sendMsg,
+			userId: contact.userId});
+	}
+}
 
 // background process trying to join or leave chat
 var chatTryer = (function() {

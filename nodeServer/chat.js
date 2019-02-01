@@ -79,7 +79,7 @@ var chatRoomProto = {
 				location: location, date: date, nbread: nbread};
 		
 		// broadcast message to all other users in chat
-		this.broadcast(user, 'newMessage', message);
+		this.broadcast(user, 'newMessage', {status: 'success', message: message});
 		
 		callback(null);
 	},
@@ -100,7 +100,7 @@ var chatRoomProto = {
 				return true;
 			
 			return false;
-		}, 'messageAck', message);
+		}, 'messageAck', {status: 'success', message: message});
 		
 		callback(null);
 	},
@@ -121,7 +121,7 @@ var chatRoomProto = {
 					ackStart: ack.ackStart, ackEnd: ack.ackEnd};
 			
 			// broadcast message to all users
-			chatRoom.broadcastAll('messageAckUndo', message);
+			chatRoom.broadcastAll('messageAckUndo', {status: 'success', message: message});
 			
 			i++;
 			if(i == acks.length)
@@ -155,8 +155,8 @@ var chatRoomProto = {
 					
 					return false;
 				},
-				'membersJoin',
-				{groupId: chatRoom.groupId, members: lib.filterUsersData(sessions)});
+				'membersJoin', {status: 'success', groupId: chatRoom.groupId, 
+					members: lib.filterUsersData(sessions)});
 				
 				chatRoom.printMembers();
 				
@@ -198,7 +198,8 @@ var chatRoomProto = {
 			if (i == sessions.length) {
 				// notify users
 				chatRoom.broadcastAll('membersLeave',
-						{groupId: chatRoom.groupId, members: lib.filterUsersData(sessions)});
+						{status: 'success', groupId: chatRoom.groupId, 
+					members: lib.filterUsersData(sessions)});
 				
 				chatRoom.printMembers();
 				
