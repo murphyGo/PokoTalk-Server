@@ -33,8 +33,8 @@ var filterUsersData = function(users) {
 var filterGroupData = function(group) {
 	return {groupId: group.groupId, name: group.name, 
 		nbMembers: group.nbMembers, nbNewMessages: group.nbNewMessages, 
-		lastMessageDate: group.lastMessageDate, 
-		lastMessageId: group.lastMessageId, alias: group.alias, 
+		lastMessage: group.lastMessage,
+		alias: group.alias, 
 		members: filterUsersData(group.members), 
 		contactId: group.contactId || null, 
 		eventId: group.eventId || null};
@@ -42,7 +42,8 @@ var filterGroupData = function(group) {
 
 var filterMessageData = function(message) {
 	return {groupId: message.groupId, messageId: message.messageId,
-		userId: message.userId, nbread: message.nbread, 
+		userId: message.userId, messageType: message.messageType, 
+		nbread: message.nbread, 
 		date: message.date, importance: message.importance,
 		content: message.content, location: message.location};
 };
@@ -162,6 +163,10 @@ var debug = function(message) {
 		console.log(message);
 }
 
+var parseLastMessageId = function(messageId) {
+	return parseInt(messageId) + 1 || 1;
+}
+
 module.exports = {filterUserData: filterUserData,
 		filterUsersData: filterUsersData,
 		filterGroupData: filterGroupData,
@@ -173,7 +178,8 @@ module.exports = {filterUserData: filterUserData,
 		isDate: isDate,
 		containsUser: containsUser,
 		recursion: recursion,
-		debug: debug};
+		debug: debug,
+		parseLastMessageId: parseLastMessageId};
 
 if (require.main == module) {
 	

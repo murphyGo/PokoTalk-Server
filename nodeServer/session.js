@@ -175,6 +175,7 @@ function init(user) {
 			}
 		], function(err) {
 			if (err) {
+				console.log(err.message);
 				user.login = userState.LOGOUT;
 				return user.emit('sessionLogin', {status: 'fail', errorMsg: 'failed to login'});
 			} else {
@@ -203,7 +204,6 @@ function init(user) {
 			} else {
 				user.login = userState.LOGOUT;
 				user.emit('logout', {status: 'success'});
-				lib.debug('user ' + user.email + ' logout');
 			}
 		})
 	});
@@ -279,20 +279,17 @@ var loginUser = dbManager.composablePattern(function(pattern, oCallback) {
 var logoutUser = dbManager.composablePattern(function(pattern, oCallback) {
 	var user = this.data.user;
 	var db = this.data.db;
-	
+	var email = user.email;
 	//TODO: leaving group chat and removing user session should work in callback pattern
 	//vulnerability: if leaving group fails and if user logins again, user may get messages
 	//               for some other user
 	chatManager.leaveAllGroupChat({user: user});
 	removeUserSession(user);
 	
-	lib.debug('user ' + user.email + ' logout');
+	lib.debug('user ' + email + ' logout');
 	
 	pattern([
 		function(callback) {
-			this.db.removeSession({sessionId: user.sessionId}, callback);
-		},
-		function(result, fields, callback) {
 			// logout
 			user.userId = null;
 			user.email = null;
@@ -369,7 +366,7 @@ function getUserSessions(user, mustExist) {
 	if (mustExist && (!sessions || sessions.indexOf(user) < 0))
 		throw Error('user session get failed, but user is alive');
 	
-	return sessions;
+	return sessions ? sessions : [];
 }
 
 //mustExist : every user should have at least one session

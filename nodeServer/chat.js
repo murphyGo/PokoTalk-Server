@@ -68,13 +68,14 @@ var chatRoomProto = {
 	sendMessage: function(data, callback) {
 		var user = data.user;
 		var messageId = data.messageId;
+		var messageType = data.messageType;
 		var nbread = data.nbread;
 		var content = data.content || '';
 		var importance = data.importance || 0;
 		var location = data.location;
 		var date = data.date;
 		
-		var message = {groupId: this.groupId, messageId: messageId, 
+		var message = {groupId: this.groupId, messageId: messageId, messageType: messageType,
 				userId: user.userId, content: content, importance: importance,
 				location: location, date: date, nbread: nbread};
 		
@@ -94,7 +95,7 @@ var chatRoomProto = {
 		var message = {groupId: this.groupId, userId: user.userId,
 				ackStart: ackStart, ackEnd: ackEnd};
 		
-		// broadcast
+		// broadcast to user sessions
 		this.broadcastFilter(function(user) {
 			if (users.indexOf(user) >= 0)
 				return true;

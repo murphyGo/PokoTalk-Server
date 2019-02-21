@@ -190,14 +190,22 @@ var queries = {
 
 	getLastMessageIdByGroupId: "SELECT max(messageId) as messageId " +
 			"FROM Messages WHERE GroupId = ? %",
+			
+	getLastInsertId: "SELECT last_insert_id() as id %",
 	
 	getLastInsertMessage: "SELECT messageId, accountId as userId, groupId, " +
-			"content, date, importance, location, nbread, leftGroup " +
+			"messageType, content, date, importance, location, nbread " +
 			"FROM Messages " +
 			"WHERE id = (SELECT last_insert_id()) %",
 			
+	getLastMessageOfGroup: "SELECT messageId, accountId as userId, groupId, " +
+			"messageType, content, date, importance, location, nbread " +
+			"FROM Messages " +
+			"WHERE groupId = ? and id = (SELECT max(id) FROM Messages WHERE groupId = ?) " +
+			"and messageType not in (1, 2) %",
+			
 	getRecentMessages: "SELECT messageId, accountId as userId, groupId, " +
-			"content, date, importance, location, nbread, leftGroup " +
+			"messageType, content, date, importance, location, nbread " +
 			"FROM Messages " +
 			"WHERE groupId = ? and messageId >= " +
 			"(SELECT ackStart " +
@@ -300,9 +308,9 @@ var queries = {
 	addGroupMember: "INSERT INTO GroupMembers(groupId, accountId, ackStart) " +
 			"VALUES (?, IFNULL((SELECT max(messageId) + 1 FROM Messages WHERE groupId = ?), 1))",
 
-	addMessage: "INSERT INTO Messages(groupId, messageId, accountId, importance, " +
+	addMessage: "INSERT INTO Messages(groupId, messageId, accountId, messageType, importance, " +
 			"content, location, date, nbread) " +
-			"VALUES(?, ?, ?, ?, ?, ?, ?, ?) ",
+			"VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?) ",
 
 	addMessageAck: "INSERT INTO MessageAcks SET ?",
 
@@ -490,8 +498,15 @@ var dbPrototype = {
 		this.conn.query(selectLock(queries.getLastMessageIdByGroupId, data),
 				[data.groupId], callback);
 	},
+	getLastInsertId: function (data, callback) {
+		this.conn.query(selectLock(queries.getLastInsertId, data), callback);
+	},
 	getLastInsertMessage: function (data, callback) {
 		this.conn.query(selectLock(queries.getLastInsertMessage, data), callback);
+	},
+	getLastMessageOfGroup: function (data, callback) {
+		this.conn.query(selectLock(queries.getLastMessageOfGroup, data), 
+				[data.groupId, data.groupId], callback);
 	},
 	getRecentMessages: function (data, callback) {
 		this.conn.query(selectLock(queries.getRecentMessages, data),
@@ -564,7 +579,7 @@ var dbPrototype = {
 	},
 	addMessage: function(data, callback)  {
 		this.conn.query(queries.addMessage,
-				[data.groupId, data.messageId, data.userId, data.importance, 
+				[data.groupId, data.messageId, data.userId, data.messageType, data.importance, 
 					data.content, data.location, data.date, data.nbread], callback);
 	},
 	addMessageAck: function(data, callback)  {

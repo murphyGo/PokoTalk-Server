@@ -325,18 +325,41 @@ var getGroupList = function(data, callback) {
 						return callback(err);
 					
 					groups[i].members = [];
-					// for compartibility
-					groups[i].id = groups[i].groupId;
 					
 					for (var j = 0; j < members.length; j++)
 						groups[i].members.push(lib.filterUserData(members[j]));
-					
-					groups[i] = lib.filterGroupData(groups[i]);
 					
 					getMembers(i + 1);
 				});
 			}
 			getMembers(0);
+		},
+		function(result, callback) {
+			var groups = result;
+			var db = this.db;
+			
+			// get last message of all group 
+			var getLastMessages = function (i) {
+				if (i >= groups.length)
+					return callback(null, groups);
+				
+				db.getLastMessageOfGroup({groupId: groups[i].groupId}, function(err, result) {
+					if (err)
+						return callback(err);
+					
+					if (result.length > 0) {
+						groups[i].lastMessage = lib.filterMessageData(result[0]);
+						
+						// for compartibility
+						groups[i].id = groups[i].groupId;
+						
+						groups[i] = lib.filterGroupData(groups[i]);
+					}
+					
+					getLastMessages(i + 1);
+				});
+			}
+			getLastMessages(0);
 		}
 	],
 	function(err, result) {
@@ -453,7 +476,16 @@ var addMembers = dbManager.composablePattern(function(pattern, callback) {
 		return callback(null, addedMembers);
 	//console.log(members);
 	pattern([
-		function(callback) {
+		function(result, fields, callback) {
+			var data = {user: user, groupId: groupId,
+					messageType: sendMessage.messageType.joinGroup,
+					content: '', importance: 0, location: null};
+			
+			// add member invited message
+			chatManager.sendMessage({data: data, db: this.db}, callback);
+		},
+		// process data from client
+		function(message, callback) {
 			var db = this.db;
 			
 			// recursive function adding multiple users to group

@@ -52,14 +52,14 @@ CREATE TABLE GroupMembers (
 CREATE TABLE Messages (
     id bigint unsigned NOT NULL AUTO_INCREMENT,
     groupId int NOT NULL,
-    messageId int unsigned,                          /* Message id in this group */
+    messageId int unsigned NOT NULL,                 /* Message id in this group */
     accountId int NOT NULL,
+    messageType decimal(1) NOT NULL DEFAULT 0,       /* 0: Text, 1: joinGroup, 2: leftGroup, 3: image, 4: file share */
     date timestamp NOT NULL,
     nbread int NOT NULL DEFAULT 1,                   /* Number of not read */
     importance decimal(1) NOT NULL DEFAULT 0,        /* 0: Normal, 1: Important, 2: Very Important */
     content text NOT NULL,
     location varchar(64),                            /* Location sharing */
-    leftGroup bit(1) DEFAULT 0,                      /* Left group? */
     CONSTRAINT Messages_pk PRIMARY KEY (id)
 );
 
@@ -70,6 +70,13 @@ CREATE TABLE MessageAcks (
     ackStart int unsigned NOT NULL,                  /* The user read from here(inclusive) */
     ackEnd int unsigned NOT NULL,                    /* until here(inclusive) */
     CONSTRAINT MessagesAcks_pk PRIMARY KEY (id)
+);
+
+CREATE TABLE GroupHistory (
+	groupId int NOT NULL,
+	messageId int unsigned NOT NULL,
+	accountId int NOT NULL,
+	CONSTRAINT GroupHistory_pk PRIMARY KEY (groupId, messageId)
 );
 
 -- 
@@ -141,10 +148,17 @@ ALTER TABLE GroupMembers ADD CONSTRAINT GroupMembers_AccountId FOREIGN KEY (acco
 -- order of id must be same as order of date 
 ALTER TABLE Messages ADD INDEX Messages_GroupId_Id (groupId, id);
 ALTER TABLE Messages ADD INDEX Messages_GroupId_Timestamp (groupId, date);
-ALTER TABLE Messages ADD INDEX Messages_GroupId_MessageId (groupId, messageId);
+ALTER TABLE Messages ADD UNIQUE INDEX Messages_GroupId_MessageId (groupId, messageId);
 
 ALTER TABLE Messages ADD CONSTRAINT Messages_GroupId_Accounts FOREIGN KEY (groupId, accountId) 
     REFERENCES GroupMembers (groupId, accountId) ON UPDATE CASCADE ON DELETE CASCADE;
+    
+-- Group Histories
+ALTER TABLE GroupHistory ADD CONSTRAINT GroupHistory_MessageId FOREIGN KEY (groupId, messageId) 
+    REFERENCES Messages (groupId, messageId) ON UPDATE CASCADE ON DELETE CASCADE;
+    
+ALTER TABLE GroupHistory ADD CONSTRAINT GroupHistory_AccountId FOREIGN KEY (accountId) 
+    REFERENCES Accounts (id) ON UPDATE CASCADE ON DELETE CASCADE;
     
 -- MessageAcks
 ALTER TABLE MessageAcks ADD INDEX MessageAcks_AckStart (ackStart, ackEnd);

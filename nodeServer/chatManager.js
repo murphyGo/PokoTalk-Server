@@ -8,6 +8,14 @@ var dbManager = require('./dbManager');
 // set of active chats
 var allChatRoom = rbTree.createRBTree();
 
+var messageType = {
+		textMessage: 0,
+		joinGroup: 1,
+		leftGroup: 2,
+		image: 3,
+		fileShare: 4
+};
+
 /* User operations
  * name               arguments
  * joinContactChat    email(of contact)
@@ -113,7 +121,7 @@ var init = function(user) {
 				var contact = this.data.contact;
 				
 				// let user know the new group for contact
-				emitJoinContactChat(group, contact);
+				emitJoinContactChat(group, user, contact);
 
 				callback(null);
 			}
@@ -158,99 +166,30 @@ var init = function(user) {
 		});
 	});
 
-	// TODO: max(messageId) + 1 is not alway true, because when user exits
-	//       messages of the users are removed -> let messages stay even if the user who sent the messgage has left
-	// store message in database and broadcast to all other users
 	user.on('sendMessage', function(data) {
 		if (!session.validateRequest('sendMessage', user, true, data))
 			return;
 		
 		var groupId = parseInt(data.groupId);
+		var sendId = data.sendId;
 		var content = data.content || '';
 		var importance = data.importance || 0;
 		var location = data.location || null;
-		var date = new Date();
-		
-		// client defined id for the message
-		// used for identifying message sent feedback
-		var sendId = data.sendId;
-		if (sendId !== 0 && !sendId)
-			return;
-		
+	
 		if (groupId !== groupId)
 			return;
 
 		dbManager.trxPattern([
 			function(callback) {
 				// get group member count
-				this.db.getGroupMemberNumber({groupId: groupId, update: true}, callback)
-			},
-			function(result, fields, callback) {
-				if (result.length == 0)
-					return callback(new Error('failed to get group member count'));
-				
-				this.data.nbMembers = result[0].nbMembers;
-				
-				// check if the user is member of the group
-				this.db.getGroupMemberByUser({groupId: groupId, userId: user.userId,
-					update: true}, callback);
-			},
-			function(result, fields, callback) {
-				if (result.length == 0)
-					return callback(new Error('You are not member of the group'));
-				
-				this.db.getLastMessageIdByGroupId({groupId: groupId, update: true}, callback);
-			},
-			function(result, fields, callback) {
-				if (result.length == 0)
-					return callback(new Error('Failed to get message id'));
-				
-				var nbMembers = this.data.nbMembers;
-				var messageId = parseInt(result[0].messageId) + 1 || 1;
-				
-				//console.log(messageId);
-				
-				var data = {groupId: groupId, userId: user.userId, content: content,
-						importance: importance, location: location, date: date, 
-						nbread: nbMembers - 1, messageId: messageId};
-				
-				this.data.message = lib.filterMessageData(data);
-				
-				// save message in database
-				this.db.addMessage(data, callback);
-			},
-			function(result, fields, callback) {
-				if (result.affectedRows == 0)
-					return callback(new Error('Failed to save in database'));
-				
-				//TODO: put this process into background so that send message processing completes quickly
-				this.db.incrementNbNewMessagesOthers({groupId: groupId, userId: user.userId},
-						callback);
-			},
-			function(result, fields, callback) {
-				// get active chat
-				var chatRoom = allChatRoom.get(groupId);
-
-				if (!chatRoom)
-					return callback(null);
-				
-				var data = this.data.message;
-				data.user = user;
-				
-				user.emit('sendMessage', {status: 'success', sendId: sendId, messageId: data.messageId, date:data.date,
-					nbread: this.data.nbMembers - 1, groupId: groupId});
-				
-				// broadcast message
-				// TODO: optimization -> cache messageId so set nbread on server 
-				chatRoom.sendMessage(data, callback);
+				sendMessage({sendId: sendId, groupId: groupId, user: user, messageType: messageType.textMessage,
+					content: content, importance: importance, location: location, db: this.db}, 
+					callback);
 			}
 		],
 		function(err) {
 			if (err) {
 				console.log('failed to save message\r\n' + err);
-
-				user.emit('sendMessage', {status: 'fail', sendId: sendId, 
-					errorMsg: 'failed to send message'});
 			}
 		});
 	});
@@ -295,8 +234,11 @@ var init = function(user) {
 
 				// check if already acked
 				if (ack && ack.ackStart <= ackStart &&
-						ack.ackEnd >= ackEnd)
-					return callback(new Error('Already acked'));
+						ack.ackEnd >= ackEnd) {
+					var error = new Error('Already acked');
+					error.alreadyAcked = true;
+					return callback(error);
+				}
 
 				var mergedAckStart = ackStart;
 				var mergedAckEnd = ackEnd;
@@ -397,10 +339,21 @@ var init = function(user) {
 			}
 		],
 		function(err) {
-			//console.log('end ack' + err);
+		
 			if (err) {
-				user.emit('ackMessage', {status: 'fail', errorMsg: 'failed to update ack'});
+				lib.debug('Ack error : ' + err.message);
+				if (!err.alreadyAcked) {
+					return user.emit('ackMessage', {status: 'fail', errorMsg: 'failed to update ack'});
+				}
 			}
+			
+			// ackMessage just notify the session that ack is completed from ackStart to ackEnd.
+			// This does not mean the user must decrement nbNotReadUser of messages with
+			// messageId from ackStart to ackEnd. This message just notifies that the session
+			// don't have to ack message id in this range again.
+			// NOTE: User must decrement nbNotReadUser for messageAck event.
+			user.emit('ackMessage', {status: 'success', groupId: groupId, 
+				ackStart: ackStart, ackEnd: ackEnd});
 		});
 	});
 
@@ -475,8 +428,7 @@ var initUser = dbManager.composablePattern(function(pattern, callback) {
 	var user = this.data.user;
 	user.chatRooms = [];
 
-	// when logined, user will get group list and
-	// automatically join all chatRooms
+	// when logined, user will automatically join all chatRooms
 	pattern([
 		function(callback) {
 			group.getGroupList({user: user, db: this.db}, callback);
@@ -514,11 +466,6 @@ var initUser = dbManager.composablePattern(function(pattern, callback) {
 
 			joinGroupIter(0);
 		},
-		function(callback) {
-			user.emit('getGroupList', {status: 'success', groups: this.data.groupList});
-
-			callback(null);
-		}
 	],
 	function(err) {
 		if (err) {
@@ -530,6 +477,109 @@ var initUser = dbManager.composablePattern(function(pattern, callback) {
 			callback(null);
 		}
 	}, {db: this.data.db});
+});
+
+
+// TODO: max(messageId) + 1 is not alway true, because when user exits
+//       messages of the users are removed -> let messages stay even if the user who sent the messgage has left
+// store message in database and broadcast to all other users
+var sendMessage = dbManager.composablePattern(function(pattern, callback) {
+	var user = this.data.user;
+	var groupId = parseInt(this.data.groupId);
+	var messageType = this.data.messageType;
+	var content = this.data.content || '';
+	var importance = this.data.importance || 0;
+	var location = this.data.location || null;
+	var date = new Date();
+	var joinMemberUserIds = this.data.joinMemberUserIds || null;
+	
+	// client defined id for the message
+	// used for identifying message sent feedback
+	var sendId = parseInt(this.data.sendId);
+	
+	if (groupId !== groupId)
+		return callback(new Error("failed to parse groupId"));
+
+	pattern([
+		function(callback) {
+			// get group member count
+			this.db.getGroupMemberNumber({groupId: groupId, update: true}, callback)
+		},
+		function(result, fields, callback) {
+			if (result.length == 0)
+				return callback(new Error('failed to get group member count'));
+			
+			this.data.nbMembers = result[0].nbMembers;
+			
+			// check if the user is member of the group
+			this.db.getGroupMemberByUser({groupId: groupId, userId: user.userId,
+				update: true}, callback);
+		},
+		function(result, fields, callback) {
+			if (result.length == 0)
+				return callback(new Error('You are not member of the group'));
+			
+			this.db.getLastMessageIdByGroupId({groupId: groupId, update: true}, callback);
+		},
+		function(result, fields, callback) {
+			if (result.length == 0)
+				return callback(new Error('Failed to get message id'));
+			
+			var nbMembers = this.data.nbMembers;
+			var messageId = parseInt(result[0].messageId) + 1 || 1;
+			
+			var data = {groupId: groupId, userId: user.userId, messageType: messageType,
+					content: content, importance: importance, location: location, date: date, 
+					nbread: nbMembers - 1, messageId: messageId};
+			
+			this.data.message = lib.filterMessageData(data);
+			
+			// save message in database
+			this.db.addMessage(data, callback);
+		},
+		function(result, fields, callback) {
+			if (result.affectedRows == 0)
+				return callback(new Error('Failed to save in database'));
+			
+			//TODO: put this process into background so that send message processing completes quickly
+			this.db.incrementNbNewMessagesOthers({groupId: groupId, userId: user.userId},
+					callback);
+		},
+		function(result, fields, callback) {
+			// get active chat
+			var chatRoom = allChatRoom.get(groupId);
+
+			if (!chatRoom)
+				return callback(null);
+			
+			var data = this.data.message;
+			data.user = user;
+			
+			// sendMessage is sent only when sendId exists
+			if (sendId === sendId) {
+				user.emit('sendMessage', {status: 'success', sendId: sendId, messageId: data.messageId, date:data.date,
+					nbread: this.data.nbMembers - 1, groupId: groupId});
+			}
+			
+			// broadcast message
+			// TODO: optimization -> cache messageId so set nbread on server 
+			chatRoom.sendMessage(data, callback);
+		}
+	],
+	function(err) {
+		if (err) {
+			console.log('failed to save message\r\n' + err);
+
+			if (sendId === sendId) {
+				user.emit('sendMessage', {status: 'fail', sendId: sendId, 
+					errorMsg: 'failed to send message'});
+			}
+			
+			callback(err);
+		} else {
+			callback(null, this.data.message);
+		}
+	});
 });
 
 // user enter group chat invited before
@@ -745,26 +795,14 @@ var removeGroupChat = function(chatRoom) {
 	return true;
 };
 
-var emitJoinContactChat = function(group, contact) {
-	// For poor client, only notify request user
-	//var sessions = session.getUserSessions(user);
-
+var emitJoinContactChat = function(group, user, contact) {
 	var sendMsg = lib.filterGroupData(group);
 	
-	var sessions = session.getUserSessions({userId: contact.userId});
-	var sessions2 = session.getUserSessions({userId: contact.userId2});
+	var sessions = session.getUserSessions({userId: user.userId});
 
 	// let user know the new group for contact
 	for (var i = 0; i < sessions.length; i++) {
 		var s = sessions[i];
-
-		s.emit('joinContactChat', {status: 'success', 
-			contactId: contact.contactId, group: sendMsg,
-			userId: contact.userId2});
-	}
-	
-	for (var i = 0; i < sessions2.length; i++) {
-		var s = sessions2[i];
 
 		s.emit('joinContactChat', {status: 'success', 
 			contactId: contact.contactId, group: sendMsg,
@@ -876,8 +914,10 @@ var chatTryer = (function() {
 })();
 
 module.exports = {init: init,
+		messageType: messageType,
 		initUser: initUser,
 		joinGroupChat: joinGroupChat,
+		sendMessage: sendMessage,
 		leaveGroupChat: leaveGroupChat,
 		leaveAllGroupChat: leaveAllGroupChat,
 		notifyAcks: notifyAcks,
