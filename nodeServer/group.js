@@ -64,6 +64,21 @@ function init(user) {
 				for (var i = 0; i < sessions.length; i++)
 					sessions[i].emit('addGroup', {status: 'success', group: group});
 				
+				// send join message in background
+				setTimeout(function() {
+					var addedMembers = group.members.filter(function(member) {
+						return member.userId != user.userId;
+					});
+					
+					var data = {groupId: group.groupId, user: user, addedMembers: addedMembers,
+							trx: true};
+					
+					sendMemberJoinMessageAndAddHistory(data, function(err) {
+						if (err)
+							lib.debug(err);
+					});
+				}, 0);
+				
 				callback(null);
 			}
 		],
@@ -161,6 +176,17 @@ function init(user) {
 			function(errSessions, callback) {
 				if (errSessions)
 					chatManager.chatTryer.pushSessions(groupId, errSessions, true);
+				
+				var data = {groupId: groupId, user: user, addedMembers: this.data.invitedMembers,
+						trx: true};
+				
+				// send join message in background
+				setTimeout(function() {
+					sendMemberJoinMessageAndAddHistory(data, function(err) {
+						if (err)
+							lib.debug(err);
+					});
+				}, 0);
 				
 				callback(null);
 			}
@@ -286,8 +312,9 @@ var addGroupAndStartChat = dbManager.composablePattern(function(pattern, callbac
 		} else {
 			var groupId = this.data.group.groupId;
 			
-			if (errSessions)
+			if (errSessions) {
 				chatManager.chatTryer.pushSessions(groupId, errSessions, true);
+			}
 			
 			callback(null, this.data.group, this.data.sessions);
 		}
@@ -464,6 +491,68 @@ var addGroup = dbManager.composablePattern(function(pattern, callback){
 	});
 });
 
+var sendMemberJoinMessageAndAddHistory = dbManager.composablePattern(function(pattern, callback) {
+	var groupId = this.data.groupId;
+	var user = this.data.user;
+	var addedMembers = this.data.addedMembers;
+	
+	addedMembers = addedMembers.filter(function(member) {
+		return member.userId != user.userId;
+	});
+	
+	pattern([
+		function(callback) {
+			// avoid when user creates group alone
+			if (addedMembers.length == 0) {
+				return callback(null, null);
+			}
+			
+			var data = {user: user, groupId: groupId,
+					messageType: chatManager.messageType.joinGroup,
+					content: '', importance: 0, location: null, toMe: true,
+					db: this.db};
+			
+			// add member invited message
+			chatManager.sendMessage(data, callback);
+		},
+		function(message, callback) {
+			// fall down if no message
+			if (message == null) {
+				return callback(null);
+			}
+			
+			var db = this.db;
+			
+			// add member join history
+			lib.recursion(function(i) {
+				return i < addedMembers.length;
+			},
+			function(i, rCallback) {
+				dbManager.atomicPattern([
+					function(callback) {
+						var member = addedMembers[i];
+						
+						if (member.userId != user.userId) {
+							this.db.addMemberJoinHistory({groupId: groupId, 
+								messageId: message.messageId, userId: member.userId}, callback);
+						} else {
+							callback(null);
+						}
+					}
+				],
+				function(err) {
+					rCallback(err);
+				},
+				{db: db});
+			},
+			callback);
+		}
+	],
+	function(err) {
+		callback(err);
+	})
+});
+
 // 'user' adds users in 'members' to group 'groupId', calling 'callback' at the end
 var addMembers = dbManager.composablePattern(function(pattern, callback) {
 	var addedMembers = [];
@@ -476,16 +565,8 @@ var addMembers = dbManager.composablePattern(function(pattern, callback) {
 		return callback(null, addedMembers);
 	//console.log(members);
 	pattern([
-		function(result, fields, callback) {
-			var data = {user: user, groupId: groupId,
-					messageType: sendMessage.messageType.joinGroup,
-					content: '', importance: 0, location: null};
-			
-			// add member invited message
-			chatManager.sendMessage({data: data, db: this.db}, callback);
-		},
 		// process data from client
-		function(message, callback) {
+		function(callback) {
 			var db = this.db;
 			
 			// recursive function adding multiple users to group
@@ -570,20 +651,21 @@ var exitGroup = dbManager.composablePattern(function(pattern, callback) {
 	pattern([
 		function(callback) {
 			this.db.getGroupMemberByUser({groupId: groupId, 
-				userId: user.userId, lock: true}, callback);
+				userId: user.userId, update: true}, callback);
 		},
 		function(result, fields, callback) {
 			if (result.length == 0) {
-				return callback(new Error('You are already not in group'));
+				return callback(new Error('you are not a member of group'));
 			}
 			
-			// leave group chat
-			chatManager.leaveGroupChat({groupId: groupId, users: [user],
-				db: this.db}, callback);
+			var data = {user: user, groupId: groupId,
+					messageType: chatManager.messageType.leftGroup,
+					content: '', importance: 0, location: null, db: this.db};
+			
+			// add member exited message
+			chatManager.sendMessage(data, callback);
 		},
-		function(errSessions, callback) {
-			if (errSessions)
-				chatManager.chatTryer.pushSessions(groupId, errSessions, false);
+		function(message, callback) {
 			
 			this.db.removeGroupMember({groupId: groupId, 
 				userId: user.userId}, callback);
@@ -604,14 +686,25 @@ var exitGroup = dbManager.composablePattern(function(pattern, callback) {
 					callback);
 		},
 		function(result, fields, callback) {
-			if (result.affectedRows > 0)
+			if (result.affectedRows > 0) {
 				console.log('group ' + groupId + ' is removed from db');
+			}
 			
 			// get group member info
 			this.db.getGroupMembers({groupId: groupId, lock: true}, callback);
 		},
 		function(result, fields, callback) {
-			var totalMembers = result;
+			this.data.totalMembers = result;
+			
+			// leave group chat
+			chatManager.leaveGroupChat({groupId: groupId, users: [user],
+				db: this.db}, callback);
+		},
+		function(errSessions, callback) {
+			if (errSessions)
+				chatManager.chatTryer.pushSessions(groupId, errSessions, false);
+			
+			var totalMembers = this.data.totalMembers;
 			var contact = this.data.contact;
 			this.data.totalMembers = totalMembers;
 			

@@ -76,7 +76,7 @@ CREATE TABLE GroupHistory (
 	groupId int NOT NULL,
 	messageId int unsigned NOT NULL,
 	accountId int NOT NULL,
-	CONSTRAINT GroupHistory_pk PRIMARY KEY (groupId, messageId)
+	CONSTRAINT GroupHistory_pk PRIMARY KEY (groupId, messageId, accountId)
 );
 
 -- 
@@ -150,15 +150,12 @@ ALTER TABLE Messages ADD INDEX Messages_GroupId_Id (groupId, id);
 ALTER TABLE Messages ADD INDEX Messages_GroupId_Timestamp (groupId, date);
 ALTER TABLE Messages ADD UNIQUE INDEX Messages_GroupId_MessageId (groupId, messageId);
 
-ALTER TABLE Messages ADD CONSTRAINT Messages_GroupId_Accounts FOREIGN KEY (groupId, accountId) 
-    REFERENCES GroupMembers (groupId, accountId) ON UPDATE CASCADE ON DELETE CASCADE;
+ALTER TABLE Messages ADD CONSTRAINT Messages_GroupId FOREIGN KEY (groupId) 
+    REFERENCES Groups(id) ON UPDATE CASCADE ON DELETE CASCADE;
     
 -- Group Histories
 ALTER TABLE GroupHistory ADD CONSTRAINT GroupHistory_MessageId FOREIGN KEY (groupId, messageId) 
     REFERENCES Messages (groupId, messageId) ON UPDATE CASCADE ON DELETE CASCADE;
-    
-ALTER TABLE GroupHistory ADD CONSTRAINT GroupHistory_AccountId FOREIGN KEY (accountId) 
-    REFERENCES Accounts (id) ON UPDATE CASCADE ON DELETE CASCADE;
     
 -- MessageAcks
 ALTER TABLE MessageAcks ADD INDEX MessageAcks_AckStart (ackStart, ackEnd);

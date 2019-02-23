@@ -238,6 +238,10 @@ var queries = {
 	getNbOthersMessagesInRange: "SELECT count(messageId) as nbNewMessages " +
 			"FROM Messages " +
 			"WHERE groupId = ? and messageId >= ? and messageId <= ? and accountId != ? %",
+			
+	getMemberJoinHistory: "SELECT a.id as userId, a.email, a.nickname, a.picture " +
+			"FROM GroupHistory g INNER JOIN Accounts a ON g.accountId = a.id " + 
+			"WHERE g.groupId = ? and g.messageId = ? %",
 
 	getEventById: "SELECT e.id as eventId, e.name, e.description, e.nbParticipantsMax, e.nbParticipants, " +
 			"e.started, e.date, e.createrId, g.id as groupId " +
@@ -313,6 +317,9 @@ var queries = {
 			"VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?) ",
 
 	addMessageAck: "INSERT INTO MessageAcks SET ?",
+	
+	addMemberJoinHistory: "INSERT INTO GroupHistory(groupId, messageId, accountId) " + 
+			"VALUES(?, ?, ?) ",
 
 	addEvent: "INSERT INTO Events SET ?",
 
@@ -530,6 +537,10 @@ var dbPrototype = {
 		this.conn.query(selectLock(queries.getNbOthersMessagesInRange, data),
 				[data.groupId, data.startId, data.endId, data.userId], callback);
 	},
+	getMemberJoinHistory: function (data, callback) {
+		this.conn.query(selectLock(queries.getMemberJoinHistory, data),
+				[data.groupId, data.messageId], callback);
+	},
 	getEventById: function (data, callback) {
 		this.conn.query(selectLock(queries.getEventById, data),
 				[data.eventId], callback);
@@ -586,6 +597,10 @@ var dbPrototype = {
 		this.conn.query(queries.addMessageAck,
 				{groupId:data.groupId, accountId:data.userId,
 			ackStart:data.ackStart, ackEnd:data.ackEnd}, callback);
+	},
+	addMemberJoinHistory: function(data, callback)  {
+		this.conn.query(queries.addMemberJoinHistory,
+				[data.groupId, data.messageId, data.userId], callback);
 	},
 	addEvent: function(data, callback)  {
 		this.conn.query(queries.addEvent,

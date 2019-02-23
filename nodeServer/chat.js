@@ -74,13 +74,19 @@ var chatRoomProto = {
 		var importance = data.importance || 0;
 		var location = data.location;
 		var date = data.date;
+		var toMe = data.toMe ? true : false;
 		
 		var message = {groupId: this.groupId, messageId: messageId, messageType: messageType,
 				userId: user.userId, content: content, importance: importance,
 				location: location, date: date, nbread: nbread};
 		
-		// broadcast message to all other users in chat
-		this.broadcast(user, 'newMessage', {status: 'success', message: message});
+		if (toMe) {
+			// broadcast message to all users in chat including sender session
+			this.broadcastAll('newMessage', {status: 'success', message: message});
+		} else {
+			// broadcast message to all other users in chat
+			this.broadcast(user, 'newMessage', {status: 'success', message: message});
+		}
 		
 		callback(null);
 	},
@@ -95,7 +101,7 @@ var chatRoomProto = {
 		var message = {groupId: this.groupId, userId: user.userId,
 				ackStart: ackStart, ackEnd: ackEnd};
 		
-		// broadcast to user sessions
+		// broadcast to other users' sessions
 		this.broadcastFilter(function(user) {
 			if (users.indexOf(user) >= 0)
 				return true;

@@ -420,7 +420,33 @@ var init = function(user) {
 	//user.on("shareLocation",function(data){
 		//user.emit("getLocation",data);
 	//});
-//end shareLocation
+	
+	user.on('getMemberJoinHistory', function(data) {
+		if (!session.validateRequest('getMemberJoinHistory', user, true, data))
+			return;
+
+		var groupId = data.groupId;
+		var messageId = data.messageId;
+
+		dbManager.trxPattern([
+			function(callback) {
+				this.db.getMemberJoinHistory({groupId: groupId, messageId: messageId,
+					lock: true}, callback);
+			}
+		],
+		function(err, result) {
+			if (err) {
+				user.emit('getMemberJoinHistory', {status: 'fail',
+					errorMsg: 'failed to get member join history'});
+			} else {
+				var members = lib.filterUsersData(result);
+				var msg = {status: 'success', groupId: groupId, messageId: messageId,
+						members: members};
+				
+				user.emit('getMemberJoinHistory', msg);
+			}
+		});
+	});
 };
 
 // init user when logined
@@ -492,6 +518,7 @@ var sendMessage = dbManager.composablePattern(function(pattern, callback) {
 	var location = this.data.location || null;
 	var date = new Date();
 	var joinMemberUserIds = this.data.joinMemberUserIds || null;
+	var toMe = this.data.toMe;
 	
 	// client defined id for the message
 	// used for identifying message sent feedback
@@ -500,6 +527,7 @@ var sendMessage = dbManager.composablePattern(function(pattern, callback) {
 	if (groupId !== groupId)
 		return callback(new Error("failed to parse groupId"));
 
+	console.log("START SEND");
 	pattern([
 		function(callback) {
 			// get group member count
@@ -554,16 +582,19 @@ var sendMessage = dbManager.composablePattern(function(pattern, callback) {
 			
 			var data = this.data.message;
 			data.user = user;
+			data.toMe = toMe;
 			
 			// sendMessage is sent only when sendId exists
 			if (sendId === sendId) {
 				user.emit('sendMessage', {status: 'success', sendId: sendId, messageId: data.messageId, date:data.date,
 					nbread: this.data.nbMembers - 1, groupId: groupId});
 			}
+			console.log("END SEND");
 			
 			// broadcast message
 			// TODO: optimization -> cache messageId so set nbread on server 
 			chatRoom.sendMessage(data, callback);
+			console.log("BROADCAST");
 		}
 	],
 	function(err) {
