@@ -336,7 +336,7 @@ var getGroupList = function(data, callback) {
 	pattern([
 		function(callback) {
 			// get group list of the user
-			this.db.getAllGroupListByUser({userId: user.userId, lock: true}, callback);
+			this.db.getGroupListByUser({userId: user.userId, lock: true}, callback);
 		},
 		function(result, fields, callback) {
 			var groups = result;

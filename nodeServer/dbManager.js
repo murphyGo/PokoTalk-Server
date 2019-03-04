@@ -125,50 +125,10 @@ var queries = {
 			"%) g ON g.id = gm.groupId " +
 			"%) g ON g.id = m.groupId %",
 
-	getGroupListByUser: "SELECT g.id as groupId, g.name, g.contactId, g.eventId, g.nbNewMessages," +
-			"g.alias, g.nbMembers, max(m.date) as lastMessageDate, max(m.messageId) as lastMessageId " +
-			"FROM Messages m RIGHT JOIN " +
-			"(SELECT g.id, g.name, g.contactId, g.eventId, g.nbNewMessages, g.alias, " +
-			"count(gm.accountId) as nbMembers " +
-			"FROM GroupMembers gm RIGHT JOIN " +
-			"(SELECT g.id, g.name, g.contactId, g.eventId, gm.nbNewMessages, gm.alias " +
+	getGroupListByUser: "SELECT g.id as groupId, g.name, g.contactId, " +
+			"g.eventId, gm.nbNewMessages, gm.alias " +
 			"FROM Groups g INNER JOIN GroupMembers gm ON g.id = gm.groupId " +
-			"WHERE gm.accountId = ? and g.contactId is null " +
-			"%) g on g.id = gm.groupId " +
-			"GROUP BY g.id " +
-			"%) g on g.id = m.groupId " +
-			"GROUP BY g.id " +
-			"ORDER BY lastMessageDate desc %",
-
-	getContactGroupListByUser: "SELECT g.id as groupId, g.name, g.contactId, g.eventId, g.nbNewMessages, " +
-			"g.alias, g.nbMembers, max(m.date) as lastMessageDate, max(m.messageId) as lastMessageId " +
-			"FROM Messages m RIGHT JOIN " +
-			"(SELECT g.id, g.name, g.contactId, g.eventId, g.nbNewMessages, g.alias, " +
-			"count(gm.accountId) as nbMembers " +
-			"FROM GroupMembers gm RIGHT JOIN " +
-			"(SELECT g.id, g.name, g.contactId, g.eventId, gm.nbNewMessages, gm.alias " +
-			"FROM Groups g INNER JOIN GroupMembers gm ON g.id = gm.groupId " +
-			"WHERE gm.accountId = ? and g.contactId is not null " +
-			"%) g on g.id = gm.groupId " +
-			"GROUP BY g.id " +
-			"%) g on g.id = m.groupId " +
-			"GROUP BY g.id " +
-			"ORDER BY lastMessageDate desc %",
-
-	getAllGroupListByUser: "SELECT g.id as groupId, g.name, g.contactId, g.eventId, g.nbNewMessages, " +
-			"g.alias, g.nbMembers, max(m.date) as lastMessageDate, max(m.messageId) as lastMessageId " +
-			"FROM Messages m RIGHT JOIN " +
-			"(SELECT g.id, g.name, g.contactId, g.eventId, g.nbNewMessages, g.alias, " +
-			"count(gm.accountId) as nbMembers " +
-			"FROM GroupMembers gm RIGHT JOIN " +
-			"(SELECT g.id, g.name, g.contactId, g.eventId, gm.nbNewMessages, gm.alias " +
-			"FROM Groups g INNER JOIN GroupMembers gm ON g.id = gm.groupId " +
-			"WHERE gm.accountId = ? " +
-			"%) g on g.id = gm.groupId " +
-			"GROUP BY g.id " +
-			"%) g on g.id = m.groupId " +
-			"GROUP BY g.id " +
-			"ORDER BY lastMessageDate desc %",
+			"WHERE gm.accountId = ? %",
 
 	getGroupMemberByUser: "SELECT * FROM GroupMembers " +
 			"WHERE groupId = ? and accountId = ? %",
@@ -201,8 +161,7 @@ var queries = {
 	getLastMessageOfGroup: "SELECT messageId, accountId as userId, groupId, " +
 			"messageType, content, date, importance, location, nbread " +
 			"FROM Messages " +
-			"WHERE groupId = ? and id = (SELECT max(id) FROM Messages WHERE groupId = ?) " +
-			"and messageType not in (1, 2) %",
+			"WHERE groupId = ? and id = (SELECT max(id) FROM Messages WHERE groupId = ?) %",
 			
 	getRecentMessages: "SELECT messageId, accountId as userId, groupId, " +
 			"messageType, content, date, importance, location, nbread " +
@@ -473,14 +432,6 @@ var dbPrototype = {
 	},
 	getGroupListByUser: function (data, callback) {
 		this.conn.query(selectLock(queries.getGroupListByUser, data),
-				[data.userId], callback);
-	},
-	getContactGroupListByUser: function (data, callback) {
-		this.conn.query(selectLock(queries.getContactGroupListByUser, data),
-				[data.userId], callback);
-	},
-	getAllGroupListByUser: function (data, callback) {
-		this.conn.query(selectLock(queries.getAllGroupListByUser, data),
 				[data.userId], callback);
 	},
 	getGroupMemberByUser: function (data, callback) {

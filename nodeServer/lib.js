@@ -32,7 +32,7 @@ var filterUsersData = function(users) {
 
 var filterGroupData = function(group) {
 	return {groupId: group.groupId, name: group.name, 
-		nbMembers: group.nbMembers, nbNewMessages: group.nbNewMessages, 
+		nbNewMessages: group.nbNewMessages, 
 		lastMessage: group.lastMessage,
 		alias: group.alias, 
 		members: filterUsersData(group.members), 

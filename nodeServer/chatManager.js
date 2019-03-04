@@ -222,6 +222,8 @@ var init = function(user) {
 			function(result, fields, callback) {
 				if (result.length == 0)
 					return callback(new Error('You are not a member of group or no such group'));
+				
+				this.data.userAckStart = result[0].ackStart;
 
 				this.db.getConflictingAcks({groupId: groupId, userId: user.userId,
 					ackStart: ackStart, ackEnd: ackEnd, update: true}, callback);
@@ -280,17 +282,23 @@ var init = function(user) {
 				}
 
 				console.log(newAcks);
-				console.log('merged ' + mergedAckStart + ' ~ ' + mergedAckEnd);
 
-				this.data.mergedAckStart = mergedAckStart;
+				this.data.mergedAckStart = Math.max(mergedAckStart, this.data.userAckStart);
 				this.data.mergedAckEnd = mergedAckEnd;
 				this.data.newAcks = newAcks;
+				
+				console.log('merged ' + this.data.mergedAckStart + ' ~ ' + this.data.mergedAckEnd);
+				
+				if (this.data.mergedAckStart > this.data.mergedAckEnd) {
+					return callback(new Error('merged ack end is greater than merged ack start'));
+				}
 
 				// remove every conflicting acks
 				this.db.removeConflictingAcks({groupId: groupId, userId: user.userId,
 					ackStart: ackStart, ackEnd: ackEnd}, callback);
 			},
 			function(result, fields, callback) {
+				// Ack start must be >= than user's first ack start number
 				var ackStart = this.data.mergedAckStart;
 				var ackEnd = this.data.mergedAckEnd;
 
@@ -301,28 +309,30 @@ var init = function(user) {
 			function(result, fields, callback) {
 				var acks = this.data.newAcks;
 				var db = this.db;
-
+				var userAckStart = this.data.userAckStart;
+				
 				lib.recursion(function(i) {
 					return i < acks.length;
 				},
 				function(i, callback) {
 					var ack = acks[i];
+					var ackStart = Math.max(ack.ackStart, userAckStart);
+					var ackEnd = ack.ackEnd;
 					
 					async.waterfall([
 						function(callback) {
 							db.decrementMessageNbread({groupId: groupId, userId: user.userId,
-								ackStart: ack.ackStart, ackEnd: ack.ackEnd}, callback);
+								ackStart: ackStart, ackEnd: ackEnd}, callback);
 						},
 						function(result, fields, callback) {
 							db.getNbOthersMessagesInRange({groupId: groupId, userId: user.userId,
-								startId: ack.ackStart, endId: ack.ackEnd, update: true}, callback);
+								startId: ackStart, endId: ackEnd, update: true}, callback);
 						},
 						function(result, fields, callback) {
 							if (result.length != 1)
 								return callback(new Error('Failed to count message'));
 							
 							var nbNewMessages = result[0].nbNewMessages;
-							
 							db.subtractNbNewMessagesOthers({groupId: groupId, userId: user.userId,
 								nbNewMessages: nbNewMessages}, callback);
 						}
@@ -333,7 +343,7 @@ var init = function(user) {
 			},
 			function(data, callback) {
 				var acks = this.data.newAcks;
-
+				
 				// notify ack to all other members
 				notifyAcks({groupId: groupId, user: user, acks: acks}, callback);
 			}
