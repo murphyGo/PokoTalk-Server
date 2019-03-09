@@ -141,6 +141,40 @@ var init = function(user) {
 		var groupId = data.groupId;
 		var nbMessageMax = data.nbMessageMax || 100;
 		nbMessageMax = nbMessageMax > 100 ? 100 : nbMessageMax;
+		var startMessageId = data.startMessageId;
+		startMessageId = startMessageId >= 0 ? startMessageId : 0;
+
+		dbManager.trxPattern([
+			function(callback) {
+				// check if the user is member of the group
+				this.db.getGroupMemberByUser({groupId: groupId, userId: user.userId,
+					lock: true}, callback);
+			},
+			function(result, fields, callback) {
+				if (result.length == 0)
+					return callback(new Error('You are not member of the group'));
+
+				// get at most 100 messages
+				this.db.getMessagesFromId({groupId: groupId, userId: user.userId, 
+					startMessageId: startMessageId, nbMessages: nbMessageMax, lock: true}, callback);
+			}
+		],
+		function(err, result) {
+			if (err) {
+				user.emit('readMessage', {status: 'fail', errorMsg: 'server error'});
+			} else {
+				user.emit('readMessage', {status: 'success', groupId: groupId, messages: result});
+			}
+		});
+	});
+	
+	user.on('readRecentMessage', function(data) {
+		if (!session.validateRequest('readRecentMessage', user, true, data))
+			return;
+
+		var groupId = data.groupId;
+		var nbMessageMax = data.nbMessageMax || 100;
+		nbMessageMax = nbMessageMax > 100 ? 100 : nbMessageMax;
 
 		dbManager.trxPattern([
 			function(callback) {
@@ -159,13 +193,43 @@ var init = function(user) {
 		],
 		function(err, result) {
 			if (err) {
-				user.emit('readMessage', {status: 'fail', errorMsg: 'server error'});
+				user.emit('readRecentMessage', {status: 'fail', errorMsg: 'server error'});
 			} else {
-				user.emit('readMessage', {status: 'success', groupId: groupId, messages: result});
+				user.emit('readRecentMessage', {status: 'success', groupId: groupId, messages: result});
 			}
 		});
 	});
 
+	user.on('readAck', function(data) {
+		if (!session.validateRequest('readAck', user, true, data))
+			return;
+
+		var groupId = data.groupId;
+
+		dbManager.trxPattern([
+			function(callback) {
+				// check if the user is member of the group
+				this.db.getGroupMemberByUser({groupId: groupId, userId: user.userId,
+					lock: true}, callback);
+			},
+			function(result, fields, callback) {
+				if (result.length == 0)
+					return callback(new Error('You are not member of the group'));
+
+				// get at most 100 messages
+				this.db.getRecentMessages({groupId: groupId, userId: user.userId,
+					nbMessages: nbMessageMax, lock: true}, callback);
+			}
+		],
+		function(err, result) {
+			if (err) {
+				user.emit('readAck', {status: 'fail', errorMsg: 'server error'});
+			} else {
+				user.emit('readAck', {status: 'success', groupId: groupId, messages: result});
+			}
+		});
+	});
+	
 	user.on('sendMessage', function(data) {
 		if (!session.validateRequest('sendMessage', user, true, data))
 			return;
@@ -248,7 +312,7 @@ var init = function(user) {
 				if (ack) {
 					if (ack.ackStart <= ackStart) {
 						mergedAckStart = ack.ackStart;
-					} else {
+					} else if (ackStart >= this.data.userAckStart) {
 						newAcks.push({ackStart: ackStart, ackEnd: ack.ackStart - 1});
 					}
 

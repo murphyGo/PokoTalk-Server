@@ -173,15 +173,20 @@ var queries = {
 			"ORDER BY messageId desc " +
 			"LIMIT ? %",
 
-	getMessagesFromId: "SELECT * " +
+	getMessagesFromId: "SELECT messageId, accountId as userId, groupId, " +
+			"messageType, content, date, importance, location, nbread " +
 			"FROM Messages " +
-			"WHERE groupId = ? and messageId <= ? " +
-			"and messageId >= " +
+			"WHERE groupId = ? and messageId >= " +
 			"(SELECT ackStart " +
 			"FROM GroupMembers " +
-			"WHERE groupId = ? and accountId = ?) " +
+			"WHERE groupId = ? and accountId = ?) and messageId >= ? " +
 			"ORDER BY messageId desc " +
 			"LIMIT ? %",
+			
+	getAcksOfGroup: "SELECT ackStart, ackEnd " +
+			"FROM MessageAcks " +
+			"WHERE groupId = ? " +
+			"ORDER BY ackStart %",
 
 	getAcksOfGroupByUser: "SELECT ackStart, ackEnd " +
 			"FROM MessageAcks " +
@@ -472,7 +477,7 @@ var dbPrototype = {
 	},
 	getMessagesFromId: function (data, callback) {
 		this.conn.query(selectLock(queries.getMessagesFromId, data),
-				[data.groupId, data.startFrom, data.groupId, data.userId, 
+				[data.groupId, data.groupId, data.userId, data.startMessageId,
 					data.nbMessages], callback);
 	},
 	getAcksOfGroupByUser: function (data, callback) {
