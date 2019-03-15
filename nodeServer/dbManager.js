@@ -3,6 +3,7 @@
  */
 var mysql = require('mysql');
 var async = require('async');
+var lib = require('./lib');
 
 // db connection configuration
 var pool = mysql.createPool({
@@ -183,10 +184,13 @@ var queries = {
 			"ORDER BY messageId desc " +
 			"LIMIT ? %",
 			
-	getAcksOfGroup: "SELECT ackStart, ackEnd " +
-			"FROM MessageAcks " +
-			"WHERE groupId = ? " +
-			"ORDER BY ackStart %",
+	getNbreadOfMessages: "SELECT messageId, nbread " +
+			"FROM Messages " +
+			"WHERE groupId = ? and messageId >= " +
+			"(SELECT ackStart " +
+			"FROM GroupMembers " +
+			"WHERE groupId = ? and accountId = ?) and messageId >= ? and messageId <= ? " +
+			"ORDER BY messageId %",
 
 	getAcksOfGroupByUser: "SELECT ackStart, ackEnd " +
 			"FROM MessageAcks " +
@@ -479,6 +483,11 @@ var dbPrototype = {
 		this.conn.query(selectLock(queries.getMessagesFromId, data),
 				[data.groupId, data.groupId, data.userId, data.startMessageId,
 					data.nbMessages], callback);
+	},
+	getNbreadOfMessages: function (data, callback) {
+		this.conn.query(selectLock(queries.getNbreadOfMessages, data),
+				[data.groupId, data.groupId, data.userId, 
+					data.startMessageId, data.endMessageId], callback);
 	},
 	getAcksOfGroupByUser: function (data, callback) {
 		this.conn.query(selectLock(queries.getAcksOfGroupByUser, data),
@@ -820,6 +829,9 @@ var atomicPattern = function(userFuncs, userEndFunc, config) {
 }
 
 // pattern with transaction start, commit when success, rollback when err
+// trxPattern also support restarting a transaction when deadlock occurs.
+// It tries again with random time delay and has maximum trial number.
+// If it transaction fails by deadlock more than this trial number, it fails with deadlock error.
 var trxPatternGen = function() {
 	var basicFuncs;
 
@@ -848,19 +860,28 @@ var trxPatternGen = function() {
 				// rollback and callback with error
 				if (db)
 					db.rollback(function() {
-						pattern.releaseDBFunc();
-						pattern.callUserEndFunc(err);
+						if (pattern.isMysqlDeadlockError(err) && pattern.retryDeadlock()) {
+							var delay = pattern.getNextRetrialDelay();
+							lib.debug("retry due to deadlock, " + pattern.deadlockRetrialNumber + "th retrial");
+							lib.debug("retry arfter " + delay + "millsec");
+							// If err is due to deadlock, 
+							// we start transaction again after some random delay.
+							setTimeout(() => {pattern.run.apply(pattern, arguments)}, delay);
+						} else {
+							pattern.releaseDBFunc();
+							pattern.callUserEndFunc(err);
+						}
 					});
 			} else {
 				// release db and success callback
 				if (db) {
 					db.commit(function(err) {
-						if (err)
+						if (err) {
 							db.rollback(function() {
 								pattern.releaseDBFunc();
 								pattern.callUserEndFunc(err);
 							});
-						else {
+						} else {
 							pattern.releaseDBFunc();
 							pattern.callUserEndFunc(null, result, fields);
 						}
@@ -868,6 +889,26 @@ var trxPatternGen = function() {
 				} else
 					pattern.callUserEndFunc(null, result, fields);
 			}
+		};
+		
+		this.isMysqlDeadlockError = (err) => err && err.code==='ER_LOCK_DEADLOCK' && err.errno===1213 && err.sqlState==='40001';
+		
+		this.deadlockRetrialNumber = 0;
+		this.deadlockMaxRetrial = 8;
+		this.deadlockRetrialDelay = 500;
+		this.retryDeadlock = () => {
+			if (this.deadlockRetrialNumber++ >= this.deadlockMaxRetrial) {
+				return false;
+			}
+			
+			return true;
+		};
+		
+		this.getNextRetrialDelay = () => {
+			var randomDelay = this.deadlockRetrialDelay * Math.random();
+			this.deadlockRetrialDelay *= 2;
+			
+			return randomDelay;
 		};
 	};
 

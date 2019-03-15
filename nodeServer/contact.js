@@ -25,15 +25,28 @@ var init = function(user) {
 		if (!session.validateRequest('getContactList', user, false))
 			return;
 		
-		getAcceptedContactList({user: user, trx: true},
-			function(err, result) {
-				if (err) {
-					console.log('failed to get contact list\r\n' + err);
-					
-					user.emit('getContactList', {status: 'fail', errorMsg:'server error'});
-				} else {
-					user.emit('getContactList', {status: 'success', contacts: result});
+		dbManager.trxPattern([
+			function(callback) {
+				getAcceptedContactList({user: user, db: this.db}, callback);
+			},
+			function(result, callback) {
+				var contactList = lib.filterUsersData(result);
+				
+				var event = user.emitter.pushEvent('getContactList', {status: 'success', contacts: contactList});
+				
+				callback(null, event);
+			}
+		],
+		function(err, event) {
+			if (err) {
+				console.log('failed to get contact list\r\n' + err);
+				if (event != null) {
+					event.user.emitter.cancelEvent(event);
 				}
+				user.emit('getContactList', {status: 'fail', errorMsg:'server error'});
+			} else if (event != null) {
+				event.user.emitter.fireEvent(event);
+			}
 		});
 	});
 	
@@ -41,17 +54,30 @@ var init = function(user) {
 		if (!session.validateRequest('getPendingContactList', user, false))
 			return;
 		
-		getPendingContactList({user: user, trx: true},
-				function(err, result) {
-					if (err) {
-						console.log('failed to get pending contact list\r\n' + err);
-						
-						user.emit('getPendingContactList', {status: 'fail', errorMsg:'server error'});
-					} else {
-						//console.log(result);
-						user.emit('getPendingContactList', {status: 'success', contacts: result});
-					}
-			});
+		dbManager.trxPattern([
+			function(callback) {
+				getPendingContactList({user: user, db: this.db}, callback);
+			},
+			function(result, callback) {
+				var pendingContactList = lib.filterUsersData(result);
+				
+				var event = user.emitter.pushEvent('getPendingContactList', 
+						{status: 'success', contacts: pendingContactList});
+				
+				callback(null, event);
+			}
+		],
+		function(err, event) {
+			if (err) {
+				console.log('failed to get pending contact list\r\n' + err);
+				if (event != null) {
+					event.user.emitter.cancelEvent(event);
+				}
+				user.emit('getPendingContactList', {status: 'fail', errorMsg:'server error'});
+			} else if (event != null) {
+				event.user.emitter.fireEvent(event);
+			}
+		});
 	});
 	
 	user.on('addContact', function(data) {
@@ -95,33 +121,44 @@ var init = function(user) {
 				var sessions = session.getUsersSessions([user, {userId: peerId}]);
 				
 				var i = 0;
+				var events = [];
 				if (sessions) {
 					sessions.forEach(function(session) {
 						if (session.userId == peer.userId) {
 							var jsonResult = user.getUserInfo();
 							jsonResult.invited = 1;
-							session.emit('newPendingContact', {status: 'success', contact: jsonResult});
+							events.push(session.emitter.pushEvent(
+									'newPendingContact', {status: 'success', contact: jsonResult}));
 						} else if (session.userId == user.userId) {
 							var jsonResult = lib.filterUserData(peer);
 							jsonResult.invited = 0;
-							session.emit('newPendingContact', {status: 'success', contact: jsonResult});
+							events.push(session.emitter.pushEvent(
+									'newPendingContact', {status: 'success', contact: jsonResult}));
 						} else {
 							throw new Error('bad session');
 						}
 						
 						i++;
 						if (i == sessions.length)
-							callback(null);
+							callback(events);
 					});
 				} else
-					callback(null);
+					callback(events);
 			}
 		], 
-		function(err) {
+		function(err, events) {
 			if (err) {
 				console.log('failed to add contact\r\n' + err);
-				
+				if (events != null) {
+					for (event in events) {
+						event.user.emitter.cancelEvent(event);
+					}
+				}
 				return user.emit('addContact', {status: 'fail', errorMsg: 'server error'});
+			} else if (events != null) {
+				for (event in events) {
+					event.user.emitter.fireEvent(event);
+				}
 			}
 		});
 	});
@@ -155,30 +192,39 @@ var init = function(user) {
 				
 				// notify every session of the other peer
 				var i = 0;
+				var events = [];
 				if (sessions) {
 					sessions.forEach(function(session) {
 						if (session.userId == peerId)
-							session.emit('contactRemoved', 
-									{status: 'success', userId: user.userId, email: user.email});
+							events.push(session.emitter.pushEvent('contactRemoved', 
+									{status: 'success', userId: user.userId, email: user.email}));
 						else if (session.userId == user.userId)
-							session.emit('contactRemoved', 
-									{status: 'success', userId: peerId, email: peerEmail});
+							events.push(session.emitter.pushEvent('contactRemoved', 
+									{status: 'success', userId: peerId, email: peerEmail}));
 						else 
 							throw new Error('bad session');
 						
 						i++;
 						if (i == sessions.length)
-							callback(null);
+							callback(events);
 					});
 				} else
-					callback(null);
+					callback(events);
 			}
 		], 
-		function(err) {
+		function(err, events) {
 			if (err) {
 				console.log('error when to remove contact\r\n' + err);
-				
+				if (events != null) {
+					for (event in events) {
+						event.user.emitter.cancelEvent(event);
+					}
+				}
 				return user.emit('removeContact', {status: 'fail', errorMsg: 'server error'});
+			} else if (events != null) {
+				for (event in events) {
+					event.user.emitter.fireEvent(event);
+				}
 			}
 		});
 	});
@@ -188,14 +234,26 @@ var init = function(user) {
 		if (!session.validateRequest('acceptContact', user, true, data))
 			return;
 		
-		reactPendingContact({user: user, email: data.email, accept: true, 
-			trx: true},
-		function(err) {
+		dbManager.trxPattern([
+			function(callback) {
+				reactPendingContact({user: user, email: data.email, accept: true, db: this.db}, 
+						callback);
+			}
+		],
+		function(err, events) {
 			if (err) {
 				console.log('error when to accept contact\r\n' + err);
-				
-				user.emit('acceptContact', {status: 'fail', errorMsg: 'server error'});
-			} 
+				if (events != null) {
+					for (event in events) {
+						event.user.emitter.cancelEvent(event);
+					}
+				}
+				return user.emit('acceptContact', {status: 'fail', errorMsg: 'server error'});
+			} else if (events != null) {
+				for (event in events) {
+					event.user.emitter.fireEvent(event);
+				}
+			}
 		});
 	});
 	
@@ -204,14 +262,26 @@ var init = function(user) {
 		if (!session.validateRequest('denyContact', user, true, data))
 			return;
 		
-		reactPendingContact({user: user, email: data.email, accept: false, 
-			trx: true},
-		function(err) {
+		dbManager.trxPattern([
+			function(callback) {
+				reactPendingContact({user: user, email: data.email, accept: false, db: this.db}, 
+						callback);
+			}
+		],
+		function(err, events) {
 			if (err) {
 				console.log('error when to deny contact\r\n' + err);
-				
-				user.emit('denyContact', {status: 'fail', errorMsg: 'server error'});
-			} 
+				if (events != null) {
+					for (event in events) {
+						event.user.emitter.cancelEvent(event);
+					}
+				}
+				return user.emit('denyContact', {status: 'fail', errorMsg: 'server error'});
+			} else if (events != null) {
+				for (event in events) {
+					event.user.emitter.fireEvent(event);
+				}
+			}
 		});
 	});
 }
@@ -313,31 +383,36 @@ var reactPendingContact = function(data, callback) {
 			var sessions = session.getUsersSessions([user, {userId: peerId}]);
 			
 			var i = 0;
+			var events = [];
 			if (sessions) {
 				sessions.forEach(function(session) {
 					if (session.userId == peerId) {
 						
 						if (accept)
-							session.emit('newContact', {status:'success', contact: user.getUserInfo()});
+							events.push(session.emitter.pushEvent(
+									'newContact', {status:'success', contact: user.getUserInfo()}));
 						else
-							session.emit('contactDenied', {status:'success', contact: user.getUserInfo()});
+							events.push(session.emitter.pushEvent(
+									'contactDenied', {status:'success', contact: user.getUserInfo()}));
 						
 					} else if(session.userId == user.userId) {
 						
 						if (accept)
-							session.emit('newContact', {status:'success', contact: lib.filterUserData(peer)});
+							events.push(session.emitter.pushEvent(
+									'newContact', {status:'success', contact: lib.filterUserData(peer)}));
 						else
-							session.emit('contactDenied', {status:'success', contact: lib.filterUserData(peer)});
+							events.push(session.emitter.pushEvent(
+									'contactDenied', {status:'success', contact: lib.filterUserData(peer)}));
 						
 					} else
 						throw new Error('bad session');
 					
 					i++;
 					if (i == sessions.length)
-						callback(null);
+						callback(events);
 				});
 			} else
-				callback(null);
+				callback(events);
 		}
 	],
 	function(err) {

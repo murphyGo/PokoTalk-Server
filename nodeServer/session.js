@@ -252,6 +252,10 @@ var loginUser = dbManager.composablePattern(function(pattern, oCallback) {
 		return oCallback(new Error('Failed to add user session'));
 	}
 	
+	// add user emitter
+	var emitter = eventEmitterGen(user);
+	user.emitter = emitter;
+	
 	lib.debug('user ' + user.email + ' logined');
 	
 	pattern([
@@ -429,6 +433,78 @@ function ValidateEmail(mail)
 	return false;
 }
 
+
+var eventEmitterProto = {
+	user: null,
+	eventQueue: null,
+	eventConstructor: function(user, eventName, data) {
+		this.user = user;
+		this.eventName = eventName;
+		this.data = data;
+		this.ready = false;
+		this.setData = function(data) {
+			this.data = data;
+		}
+	},
+	pushEvent: function(eventName, data) {
+		var event = new this.eventConstructor(this.user, eventName, data);
+		this.eventQueue.push(event);
+		return event;
+	},
+	fireEvent: function(event) {
+		if (this.eventQueue.length == 0) {
+			return;
+		}
+		
+		var firstEvent = this.eventQueue[0];
+		if (firstEvent == event) {
+			// If the event is first, emit and remove from queue.
+			this.user.emit(event.eventName, event.data);
+			this.eventQueue.shift();
+			
+			// If next event is ready to be fired, fire also next message asynchronously.
+			var nextEvent = this.eventQueue[0];
+			if (nextEvent != undefined && nextEvent.ready) {
+				var emitter = this;
+				setTimeout(function() {emitter.fireEvent(nextEvent)}, 0);
+			}
+		} else {
+			// The event is not the first, set it to ready. 
+			event.ready = true;
+		}
+	},
+	cancelEvent: function(event) {
+		if (this.eventQueue.length == 0) {
+			return;
+		}
+		
+		// Find index of event in queue
+		var index = this.eventQueue.indexOf(event);
+		if (index > 0) {
+			// Remove event from queue
+			this.eventQueue.splice(index, 1);
+			
+			// If next event is ready to be fired, fire also next message asynchronously.
+			var nextEvent = this.eventQueue[index];
+			if (nextEvent != undefined && nextEvent.ready) {
+				var emitter = this;
+				setTimeout(function() {emitter.fireEvent(nextEvent)}, 0);
+			}
+		}
+	}
+};
+
+var eventEmitterGen = function(user) {
+	var eventEmitter = function(user) {
+		this.eventQueue = [];
+		this.user = user;
+	};
+	
+	eventEmitter.prototype = eventEmitterProto;
+	
+	return new eventEmitter(user);
+};
+
 initSession();
 
 module.exports = {init: init,
@@ -447,3 +523,56 @@ var chatManager = require('./chatManager');
 var event = require('./event');
 var lib = require('./lib');
 var async = require('async');
+
+if (require.main == module) {
+	console.log('file: ' + __filename + '\ndir: ' + __dirname);
+
+	/**
+	 * Shuffles array in place.
+	 * @param {Array} a items An array containing the items.
+	 */
+	function shuffle(a) {
+	    var j, x, i;
+	    for (i = a.length - 1; i > 0; i--) {
+	        j = Math.floor(Math.random() * (i + 1));
+	        x = a[i];
+	        a[i] = a[j];
+	        a[j] = x;
+	    }
+	    return a;
+	}
+	
+	test1();
+	// event emitter test
+	function test1() {
+		var user = {emit: (name, data) => {console.log("SEND TO USER : " + name + ", " + data)}};
+		var emitter = eventEmitterGen(user);
+		
+		console.log("push 1 event and fire 1 event");
+		var event = emitter.pushEvent("testEvent", "testData");
+		emitter.fireEvent(event);
+		
+		console.log("push 2 event and fire 2 event");
+		var event = emitter.pushEvent("testEvent", "testData");
+		var event2 = emitter.pushEvent("testEvent2", "testData2");
+		emitter.fireEvent(event);
+		emitter.fireEvent(event2);
+		
+		console.log("push 1 event and fire 2 event");
+		var event = emitter.pushEvent("testEvent", "testData");
+		emitter.fireEvent(event);
+		emitter.fireEvent(event2);
+		
+		console.log("push 4 event and fire 4 event at random order");
+		var events = [];
+		for (var i = 0; i < 100; i++) {
+			events.push(emitter.pushEvent("testEvent" + i, "testData"));
+		}
+		shuffle(events);
+		for (var i = 0; i < 100; i++) {
+			var event = events[i];
+			emitter.fireEvent(event);
+		}
+		
+	}
+}

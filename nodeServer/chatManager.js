@@ -163,7 +163,8 @@ var init = function(user) {
 			if (err) {
 				user.emit('readMessage', {status: 'fail', errorMsg: 'server error'});
 			} else {
-				user.emit('readMessage', {status: 'success', groupId: groupId, messages: result});
+				user.emit('readMessage', {status: 'success', groupId: groupId, 
+					messages: lib.filterMessagesData(result)});
 			}
 		});
 	});
@@ -195,16 +196,21 @@ var init = function(user) {
 			if (err) {
 				user.emit('readRecentMessage', {status: 'fail', errorMsg: 'server error'});
 			} else {
-				user.emit('readRecentMessage', {status: 'success', groupId: groupId, messages: result});
+				user.emit('readRecentMessage', {status: 'success', groupId: groupId, 
+					messages: lib.filterMessagesData(result)});
 			}
 		});
 	});
 
-	user.on('readAck', function(data) {
-		if (!session.validateRequest('readAck', user, true, data))
+	user.on('readNbreadOfMessages', function(data) {
+		if (!session.validateRequest('readNbreadOfMessages', user, true, data))
 			return;
 
 		var groupId = data.groupId;
+		var startId = data.startMessageId;
+		var endId = data.endMessageId;
+		startId = startId >= 0 ? startId : 0;
+		endId = endId >= 0 ? endId : 0;
 
 		dbManager.trxPattern([
 			function(callback) {
@@ -216,16 +222,16 @@ var init = function(user) {
 				if (result.length == 0)
 					return callback(new Error('You are not member of the group'));
 
-				// get at most 100 messages
-				this.db.getRecentMessages({groupId: groupId, userId: user.userId,
-					nbMessages: nbMessageMax, lock: true}, callback);
+				// TODO: limit maximum message numbers
+				this.db.getNbreadOfMessages({groupId: groupId, userId: user.userId,
+					startMessageId: startId, endMessageId: endId, lock: true}, callback);
 			}
 		],
 		function(err, result) {
 			if (err) {
-				user.emit('readAck', {status: 'fail', errorMsg: 'server error'});
+				user.emit('readNbreadOfMessages', {status: 'fail', errorMsg: 'server error'});
 			} else {
-				user.emit('readAck', {status: 'success', groupId: groupId, messages: result});
+				user.emit('readNbreadOfMessages', {status: 'success', groupId: groupId, messages: result});
 			}
 		});
 	});
@@ -288,6 +294,14 @@ var init = function(user) {
 					return callback(new Error('You are not a member of group or no such group'));
 				
 				this.data.userAckStart = result[0].ackStart;
+				
+				if (this.data.userAckStart > ackStart) {
+					ackStart = this.data.userAckStart;
+				}
+				
+				if (ackStart > ackEnd) {
+					return callback(new Error('Your ack range is invalid'));
+				}
 
 				this.db.getConflictingAcks({groupId: groupId, userId: user.userId,
 					ackStart: ackStart, ackEnd: ackEnd, update: true}, callback);
@@ -312,7 +326,7 @@ var init = function(user) {
 				if (ack) {
 					if (ack.ackStart <= ackStart) {
 						mergedAckStart = ack.ackStart;
-					} else if (ackStart >= this.data.userAckStart) {
+					} else {
 						newAcks.push({ackStart: ackStart, ackEnd: ack.ackStart - 1});
 					}
 
@@ -347,7 +361,7 @@ var init = function(user) {
 
 				console.log(newAcks);
 
-				this.data.mergedAckStart = Math.max(mergedAckStart, this.data.userAckStart);
+				this.data.mergedAckStart = mergedAckStart;
 				this.data.mergedAckEnd = mergedAckEnd;
 				this.data.newAcks = newAcks;
 				
@@ -363,24 +377,24 @@ var init = function(user) {
 			},
 			function(result, fields, callback) {
 				// Ack start must be >= than user's first ack start number
-				var ackStart = this.data.mergedAckStart;
-				var ackEnd = this.data.mergedAckEnd;
+				var mergedAckStart = this.data.mergedAckStart;
+				var mergedAckEnd = this.data.mergedAckEnd;
 
 				// store new ack
 				this.db.addMessageAck({groupId: groupId, userId: user.userId,
-					ackStart: ackStart, ackEnd: ackEnd}, callback);
+					ackStart: mergedAckStart, ackEnd: mergedAckEnd}, callback);
 			},
 			function(result, fields, callback) {
 				var acks = this.data.newAcks;
 				var db = this.db;
-				var userAckStart = this.data.userAckStart;
 				
 				lib.recursion(function(i) {
 					return i < acks.length;
 				},
 				function(i, callback) {
 					var ack = acks[i];
-					var ackStart = Math.max(ack.ackStart, userAckStart);
+					var ackStart = ack.ackStart;
+					console.log('ack Start ' + ackStart);
 					var ackEnd = ack.ackEnd;
 					
 					async.waterfall([
@@ -413,21 +427,22 @@ var init = function(user) {
 			}
 		],
 		function(err) {
-		
 			if (err) {
 				lib.debug('Ack error : ' + err.message);
 				if (!err.alreadyAcked) {
-					return user.emit('ackMessage', {status: 'fail', errorMsg: 'failed to update ack'});
+					user.emit('ackMessage', {status: 'fail', errorMsg: 'failed to update ack'});
+				} else {
+					user.emit('ackMessage', {status: 'fail', errorMsg: 'you already acked'});
 				}
+			} else {
+				// ackMessage just notify the session that ack is completed from ackStart to ackEnd.
+				// This does not mean the user must decrement nbNotReadUser of messages with
+				// messageId from ackStart to ackEnd. This message just notifies that the session
+				// don't have to ack message id in this range again.
+				// NOTE: User must decrement nbNotReadUser for messageAck event.
+				user.emit('ackMessage', {status: 'success', groupId: groupId, 
+					ackStart: ackStart, ackEnd: ackEnd});
 			}
-			
-			// ackMessage just notify the session that ack is completed from ackStart to ackEnd.
-			// This does not mean the user must decrement nbNotReadUser of messages with
-			// messageId from ackStart to ackEnd. This message just notifies that the session
-			// don't have to ack message id in this range again.
-			// NOTE: User must decrement nbNotReadUser for messageAck event.
-			user.emit('ackMessage', {status: 'success', groupId: groupId, 
-				ackStart: ackStart, ackEnd: ackEnd});
 		});
 	});
 
@@ -601,7 +616,6 @@ var sendMessage = dbManager.composablePattern(function(pattern, callback) {
 	if (groupId !== groupId)
 		return callback(new Error("failed to parse groupId"));
 
-	console.log("START SEND");
 	pattern([
 		function(callback) {
 			// get group member count
@@ -660,15 +674,13 @@ var sendMessage = dbManager.composablePattern(function(pattern, callback) {
 			
 			// sendMessage is sent only when sendId exists
 			if (sendId === sendId) {
-				user.emit('sendMessage', {status: 'success', sendId: sendId, messageId: data.messageId, date:data.date,
-					nbread: this.data.nbMembers - 1, groupId: groupId});
+				user.emit('sendMessage', {status: 'success', sendId: sendId, messageId: data.messageId, 
+					date:data.date, nbread: this.data.nbMembers - 1, groupId: groupId});
 			}
-			console.log("END SEND");
 			
 			// broadcast message
 			// TODO: optimization -> cache messageId so set nbread on server 
 			chatRoom.sendMessage(data, callback);
-			console.log("BROADCAST");
 		}
 	],
 	function(err) {

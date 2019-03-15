@@ -4,12 +4,14 @@ var filterUserData = function(user) {
 	if (!user)
 		return null;
 	
+	var lastSeen = dateToEpoch(user.lastSeen);
+	
 	return {userId: user.userId || user.id, email: user.email, 
 		nickname: user.nickname, picture: user.picture,
-		lastSeen: user.lastSeen, login: user.login};
+		lastSeen: lastSeen, login: user.login, invited: user.invited};
 };
 
-// data of multiple users, it filters duplicate
+// data of multiple users
 var filterUsersData = function(users) {
 	var result = [];
 	
@@ -23,7 +25,7 @@ var filterUsersData = function(users) {
 	};
 	
 	for (var i = 0; i < users.length; i++) {
-		if (users[i] && !contains(users[i]))
+		if (users[i])
 			result.push(filterUserData(users[i]));
 	}
 	
@@ -41,11 +43,22 @@ var filterGroupData = function(group) {
 };
 
 var filterMessageData = function(message) {
+	var date = dateToEpoch(message.date);
 	return {groupId: message.groupId, messageId: message.messageId,
 		userId: message.userId, messageType: message.messageType, 
-		nbread: message.nbread, 
-		date: message.date, importance: message.importance,
+		nbread: message.nbread, date: date, importance: message.importance,
 		content: message.content, location: message.location};
+};
+
+//data of multiple messages.
+var filterMessagesData = function(messages) {
+	var result = [];
+	
+	for (var i = 0; i < messages.length; i++) {
+		result.push(filterMessageData(messages[i]));
+	}
+	
+	return result;
 };
 
 var filterEventData = function(event) {
@@ -85,6 +98,15 @@ var filterLocalizationData = function(localization) {
 		return null;
 	
 	return {location: localization.location, date: localization.date};
+};
+
+var dateToEpoch = function(date) {
+	if (date == null) {
+		return null;
+	}
+	date = typeof date == 'object' ? date.getTime() : date;
+	date = typeof date == 'number' ? date : null;
+	return date;
 };
 
 var isArray = function(array) {
@@ -171,6 +193,7 @@ module.exports = {filterUserData: filterUserData,
 		filterUsersData: filterUsersData,
 		filterGroupData: filterGroupData,
 		filterMessageData: filterMessageData,
+		filterMessagesData: filterMessagesData,
 		filterEventData: filterEventData,
 		filterEventsData: filterEventsData,
 		filterLocalizationData: filterLocalizationData,

@@ -95,8 +95,8 @@ var chatRoomProto = {
 	sendAck: function(data, callback) {
 		var users = data.users;
 		var user = data.user;
-		var ackStart = data.ackStart || null;
-		var ackEnd = data.ackEnd || null;
+		var ackStart = typeof data.ackStart == 'number' ? data.ackStart : null;
+		var ackEnd = typeof data.ackEnd == 'number' ? data.ackEnd : null;
 		
 		var message = {groupId: this.groupId, userId: user.userId,
 				ackStart: ackStart, ackEnd: ackEnd};
