@@ -39,13 +39,13 @@ var init = function(user) {
 		],
 		function(err, event) {
 			if (err) {
-				console.log('failed to get contact list\r\n' + err);
+				lib.debug('failed to get contact list\r\n' + err);
 				if (event != null) {
-					event.user.emitter.cancelEvent(event);
+					event.cancelEvent();
 				}
 				user.emit('getContactList', {status: 'fail', errorMsg:'server error'});
 			} else if (event != null) {
-				event.user.emitter.fireEvent(event);
+				event.fireEvent();
 			}
 		});
 	});
@@ -69,13 +69,13 @@ var init = function(user) {
 		],
 		function(err, event) {
 			if (err) {
-				console.log('failed to get pending contact list\r\n' + err);
+				lib.debug('failed to get pending contact list\r\n' + err);
 				if (event != null) {
-					event.user.emitter.cancelEvent(event);
+					event.cancelEvent();
 				}
 				user.emit('getPendingContactList', {status: 'fail', errorMsg:'server error'});
 			} else if (event != null) {
-				event.user.emitter.fireEvent(event);
+				event.fireEvent();
 			}
 		});
 	});
@@ -148,16 +148,16 @@ var init = function(user) {
 		], 
 		function(err, events) {
 			if (err) {
-				console.log('failed to add contact\r\n' + err);
+				lib.debug('failed to add contact\r\n' + err);
 				if (events != null) {
-					for (event in events) {
-						event.user.emitter.cancelEvent(event);
+					for (var i in events) {
+						event[i].cancelEvent();
 					}
 				}
 				return user.emit('addContact', {status: 'fail', errorMsg: 'server error'});
 			} else if (events != null) {
-				for (event in events) {
-					event.user.emitter.fireEvent(event);
+				for (var i in events) {
+					events[i].fireEvent();
 				}
 			}
 		});
@@ -214,16 +214,16 @@ var init = function(user) {
 		], 
 		function(err, events) {
 			if (err) {
-				console.log('error when to remove contact\r\n' + err);
+				lib.debug('error when to remove contact\r\n' + err);
 				if (events != null) {
-					for (event in events) {
-						event.user.emitter.cancelEvent(event);
+					for (var i in events) {
+						events[i].cancelEvent();
 					}
 				}
 				return user.emit('removeContact', {status: 'fail', errorMsg: 'server error'});
 			} else if (events != null) {
-				for (event in events) {
-					event.user.emitter.fireEvent(event);
+				for (var i in events) {
+					events[i].fireEvent();
 				}
 			}
 		});
@@ -242,16 +242,16 @@ var init = function(user) {
 		],
 		function(err, events) {
 			if (err) {
-				console.log('error when to accept contact\r\n' + err);
+				lib.debug('error when to accept contact\r\n' + err);
 				if (events != null) {
-					for (event in events) {
-						event.user.emitter.cancelEvent(event);
+					for (var i in events) {
+						events[i].cancelEvent();
 					}
 				}
 				return user.emit('acceptContact', {status: 'fail', errorMsg: 'server error'});
 			} else if (events != null) {
-				for (event in events) {
-					event.user.emitter.fireEvent(event);
+				for (var i in events) {
+					events[i].fireEvent();
 				}
 			}
 		});
@@ -270,16 +270,16 @@ var init = function(user) {
 		],
 		function(err, events) {
 			if (err) {
-				console.log('error when to deny contact\r\n' + err);
+				lib.debug('error when to deny contact\r\n' + err);
 				if (events != null) {
-					for (event in events) {
-						event.user.emitter.cancelEvent(event);
+					for (var i in events) {
+						events[i].cancelEvent();
 					}
 				}
 				return user.emit('denyContact', {status: 'fail', errorMsg: 'server error'});
 			} else if (events != null) {
-				for (event in events) {
-					event.user.emitter.fireEvent(event);
+				for (var i in events) {
+					events[i].fireEvent();
 				}
 			}
 		});

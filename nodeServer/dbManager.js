@@ -30,8 +30,8 @@ var queries = {
 	getUserByEmail: "SELECT *, id as userId FROM Accounts WHERE email = ? %",
 
 	getUserBySession: "SELECT *, id as userId " +
-			"FROM Accounts INNER JOIN Sessions ON Accounts.id = Sessions.accountId %" +
-			"WHERE sessionId = ? ",
+			"FROM Accounts INNER JOIN Sessions ON Accounts.id = Sessions.accountId " +
+			"WHERE sessionId = ? %",
 
 	getAcceptedContactListByUser: "SELECT r.userId, r.email, r.nickname, r.picture, " +
 			"r.login, r.lastSeen, r.contactId, r.groupId, gm.nbNewMessages " +
@@ -173,6 +173,11 @@ var queries = {
 			"WHERE groupId = ? and accountId = ?) " +
 			"ORDER BY messageId desc " +
 			"LIMIT ? %",
+			
+	getMessageById: "SELECT messageId, accountId as userId, groupId, " +
+			"messageType, content, date, importance, location, nbread " +
+			"FROM Messages " +
+			"WHERE groupId = ? and messageId = ? %",
 
 	getMessagesFromId: "SELECT messageId, accountId as userId, groupId, " +
 			"messageType, content, date, importance, location, nbread " +
@@ -478,6 +483,10 @@ var dbPrototype = {
 	getRecentMessages: function (data, callback) {
 		this.conn.query(selectLock(queries.getRecentMessages, data),
 				[data.groupId, data.groupId, data.userId, data.nbMessages], callback);
+	},
+	getMessageById: function (data, callback) {
+		this.conn.query(selectLock(queries.getMessageById, data),
+				[data.groupId, data.messageId], callback);
 	},
 	getMessagesFromId: function (data, callback) {
 		this.conn.query(selectLock(queries.getMessagesFromId, data),

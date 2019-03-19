@@ -37,7 +37,7 @@ var filterGroupData = function(group) {
 		nbNewMessages: group.nbNewMessages, 
 		lastMessage: group.lastMessage,
 		alias: group.alias, 
-		members: filterUsersData(group.members), 
+		members: group.members ? filterUsersData(group.members) : null, 
 		contactId: group.contactId || null, 
 		eventId: group.eventId || null};
 };

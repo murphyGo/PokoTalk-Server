@@ -13,7 +13,6 @@
  * membersJoin
  * membersLeave
  * messageAck
- * messageAckUndo
  */
 
 var init = function(user) {
@@ -41,30 +40,43 @@ var chatRoomProto = {
 	// user broadcasts message to other users
 	// assumed the user is member of this group
 	broadcast: function(user, name, message) {
-		user.broadcast.to(this.getRoomName()).emit(name, message);
+		var sessions = this.onlineMembers;
+		
+		for (var i in sessions) {
+			var session = sessions[i];
+			if (session != user) {
+				session.emit(name, message);
+			}
+		}
+		//user.broadcast.to(this.getRoomName()).emit(name, message);
 	},
 	
 	// broadcast every user in room
 	broadcastAll: function(name, message) {
-		server.io.sockets.in(this.getRoomName()).emit(name, message);
+		var sessions = this.onlineMembers;
+		
+		for (var i in sessions) {
+			sessions[i].emit(name, message);
+		}
+		
+		//server.io.sockets.in(this.getRoomName()).emit(name, message);
 	},
 	
 	// same as broadcast but filter user will get message by 'filter' function
 	broadcastFilter: function(filter, name, message) {
-		var members = this.onlineMembers;
+		var sessions = this.onlineMembers;
 		
-		for (var i = 0; i < members.length; i++) {
-			var member = members[i];
+		for (var i = 0; i < sessions.length; i++) {
+			var session = sessions[i];
 			
-			if (filter(member))
+			if (filter(session))
 				continue;
 			
-			member.emit(name, message);
+			session.emit(name, message);
 		}
 	},
 	
-	// broadcast message to all other members
-	// input: data.user, data.content, data.importance, data.location
+	// broadcast message to member sessions
 	sendMessage: function(data, callback) {
 		var user = data.user;
 		var messageId = data.messageId;
@@ -81,10 +93,10 @@ var chatRoomProto = {
 				location: location, date: date, nbread: nbread};
 		
 		if (toMe) {
-			// broadcast message to all users in chat including sender session
+			// broadcast message to all sessions in chat including sender session
 			this.broadcastAll('newMessage', {status: 'success', message: message});
 		} else {
-			// broadcast message to all other users in chat
+			// broadcast message to all other sessions in chat
 			this.broadcast(user, 'newMessage', {status: 'success', message: message});
 		}
 		
@@ -112,35 +124,11 @@ var chatRoomProto = {
 		callback(null);
 	},
 	
-	// send undo ack to all users
-	// all sender user sessions must have left chat room
-	undoAcks: function(data, callback) {
-		var user = data.user;
-		var acks = data.acks;
-		var chatRoom = this;
-		var i = 0;
-		
-		if (acks.length == 0)
-			return callback(null);
-		
-		acks.forEach(function(ack) {
-			var message = {groupId: this.groupId, userId: user.userId,
-					ackStart: ack.ackStart, ackEnd: ack.ackEnd};
-			
-			// broadcast message to all users
-			chatRoom.broadcastAll('messageAckUndo', {status: 'success', message: message});
-			
-			i++;
-			if(i == acks.length)
-				callback(null);
-		});
-	},
-	
 	printMembers: function() {
 		var members = this.onlineMembers;
-		console.log('print group members');
+		lib.debug('print group members');
 		for (var i = 0; i < members.length; i++) {
-			console.log('group' + this.groupId + ': (' + 
+			lib.debug('group' + this.groupId + ': (' + 
 					members[i].userId + ') ' + members[i].email);
 		}
 	},
@@ -151,7 +139,7 @@ var chatRoomProto = {
 		var sessions = data.users;
 		var chatRoom = this;
 		var onlineMembers = this.onlineMembers;
-		var errSessions = [];
+		//var errSessions = [];
 		
 		var joinIter = function(i) {
 			if (i == sessions.length) {
@@ -167,10 +155,12 @@ var chatRoomProto = {
 				
 				chatRoom.printMembers();
 				
-				if (errSessions.length == 0)
+				return callback(null);
+				
+				/*if (errSessions.length == 0)
 					return callback(null, null);
-				else
-					return callback(null, errSessions);
+				//else
+				//	return callback(null, errSessions);*/
 			}
 			
 			var user = sessions[i];
@@ -178,6 +168,10 @@ var chatRoomProto = {
 			if (onlineMembers.indexOf(user) >= 0)
 				return joinIter(i + 1);
 			
+			onlineMembers.push(user);
+			joinIter(i + 1);
+			
+			/*
 			user.join(chatRoom.getRoomName(), function(err) {
 				if (err) {
 					errSessions.push(user);
@@ -187,7 +181,7 @@ var chatRoomProto = {
 					
 					joinIter(i + 1);
 				}
-			});
+			});*/
 		};
 		
 		joinIter(0);
@@ -199,7 +193,7 @@ var chatRoomProto = {
 		var sessions = data.users;
 		var chatRoom = this;
 		var onlineMembers = this.onlineMembers;
-		var errSessions = [];
+		//var errSessions = [];
 		
 		var leaveIter = function(i) {
 			if (i == sessions.length) {
@@ -210,17 +204,26 @@ var chatRoomProto = {
 				
 				chatRoom.printMembers();
 				
+				return callback(null);
+				
+				/*
 				if (errSessions.length == 0)
 					return callback(null, null);
 				else
 					return callback(null, errSessions);
+					*/
 			}
 			
 			var user = sessions[i];
+			var memberIndex = onlineMembers.indexOf(user);
 			
-			if (onlineMembers.indexOf(user) < 0)
+			if (memberIndex < 0)
 				return leaveIter(i + 1);
 			
+			onlineMembers.splice(memberIndex, 1);
+			leaveIter(i + 1);
+			
+			/*
 			user.leave(chatRoom.getRoomName(), function(err) {
 				if (err) {
 					errSessions.push(user);
@@ -233,7 +236,7 @@ var chatRoomProto = {
 					
 					leaveIter(i + 1);
 				}
-			});
+			});*/
 		};
 		
 		leaveIter(0);

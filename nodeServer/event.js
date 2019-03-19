@@ -193,7 +193,7 @@ function init(user) {
 			},
 			function(result, fiedls, callback) {
 				if (result && result.affectedRows > 0)
-					console.log('Event ' + eventId + ' is removed from db');
+					lib.debug('Event ' + eventId + ' is removed from db');
 
 				var userSessions = session.getUserSessions(user);
 				var sessions = session.getUsersSessions(this.data.participants);
@@ -221,7 +221,13 @@ function init(user) {
 				var groupId = this.data.event.groupId;
 				// if event has a group, exit from the group
 				if (groupId) {
-					group.exitGroup({groupId: groupId, user: user, trx: true});
+					setTimeout(function() {
+						group.exitGroup({groupId: groupId, user: user, trx: true},
+								function(err, message, events) {
+							
+						});
+					},
+					0);
 				}
 			}
 		});
@@ -519,7 +525,7 @@ var eventManager = {
 
 		fs.readFile(__dirname + '/mail.html', 'utf8', function (err,data) {
 			  if (err) {
-				  console.log(err);
+				  lib.debug(err);
 			    throw new Error('Failed to read mail.html');
 			  }
 			  manager.mailTemplate = data;
@@ -570,7 +576,7 @@ var eventManager = {
 		var left = fire - now;
 		var manager = this;
 
-		console.log('event \'' + event.name + '\'(' + event.eventId + ') will start after ' +
+		lib.debug('event \'' + event.name + '\'(' + event.eventId + ') will start after ' +
 				Math.floor(left / 1000) + ' sec');
 		this.upcomingEvents.push(event);
 
@@ -588,7 +594,7 @@ var eventManager = {
 		var event = this.data.event;
 		var eventId = event.eventId;
 
-		console.log('start event \'' + event.name + '\'(' + eventId + ')');
+		lib.debug('start event \'' + event.name + '\'(' + eventId + ')');
 
 		pattern([
 			function(callback) {
@@ -609,7 +615,7 @@ var eventManager = {
 				if (user && !lib.containsUser(user, participants))
 					user = null;
 
-				group.addGroupAndStartChat({name: event.name, user: user,
+				group.addGroup({name: event.name, user: user,
 					members: participants.map(function(p) {return p.email;}),
 					db: this.db}, callback);
 			},
@@ -747,9 +753,9 @@ var eventManager = {
 					// send mail with defined transport object
 					transporter.sendMail(mailOptions, function(err, info){
 					    if(err){
-					        console.log(err);
+					    	lib.debug(err);
 					    } else {
-					    	console.log('Sent email to ' + participant.email + ': ' + info.response);
+					    	lib.debug('Sent email to ' + participant.email + ': ' + info.response);
 					    }
 					    callback(err);
 					});

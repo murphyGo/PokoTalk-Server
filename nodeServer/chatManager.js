@@ -88,11 +88,12 @@ var init = function(user) {
 					// create new group for contact
 					async.waterfall([
 						function(callback) {
-							group.addGroupAndStartChat({user: user, members: [contact.email],
+							group.addGroup({user: user, members: [contact.email],
 								trx: false, db: db}, callback);
 						},
-						function(group, sessions, callback) {
+						function(group, callback) {
 							data.group = group;
+							data.groupCreated = true;
 
 							db.updateContactGroupChat({contactId: contact.contactId,
 								groupId: group.groupId}, callback);
@@ -115,21 +116,42 @@ var init = function(user) {
 			},
 			function(callback) {
 				var group = this.data.group;
-				//var sessions = session.getUsersSessions(this.data.resMembers);
-				
+
 				// For poor client, only notify request user
 				var contact = this.data.contact;
 				
 				// let user know the new group for contact
-				emitJoinContactChat(group, user, contact);
+				var events = emitJoinContactChat(group, user, contact);
+				
+				// Get every sessions of group members
+				var sessions = session.getUsersSessions(group.members);
 
-				callback(null);
+				if (this.data.groupCreated) {
+					// join every member to group chat
+					chatManager.joinGroupChat({groupId: group.groupId, users: sessions}, function(err) {
+						if (err) {
+							return callback(err, events);
+						} else {
+							return callback(null, events);
+						}
+					});
+				} else {
+					return callback(null, events);
+				}
 			}
 		],
-		function(err) {
+		function(err, events) {
 			if (err) {
-				console.log(err);
+				if (events != null) {
+					for (var i in events) {
+						events[i].cancelEvent();
+					}
+				}
 				user.emit('joinContactChat', {status: 'fail', errorMsg: 'server error'});
+			} else {
+				for (var i in events) {
+					events[i].fireEvent();
+				}
 			}
 		});
 	});
@@ -157,14 +179,23 @@ var init = function(user) {
 				// get at most 100 messages
 				this.db.getMessagesFromId({groupId: groupId, userId: user.userId, 
 					startMessageId: startMessageId, nbMessages: nbMessageMax, lock: true}, callback);
+			},
+			function(result, fields, callback) {
+				var messages = lib.filterMessagesData(result);
+				var event = user.emitter.pushEvent('readMessage',
+						{status: 'success', groupId: groupId, messages: messages});
+				
+				callback(null, event);
 			}
 		],
-		function(err, result) {
+		function(err, event) {
 			if (err) {
+				if (event) {
+					event.cancelEvent();
+				}
 				user.emit('readMessage', {status: 'fail', errorMsg: 'server error'});
 			} else {
-				user.emit('readMessage', {status: 'success', groupId: groupId, 
-					messages: lib.filterMessagesData(result)});
+				event.fireEvent();
 			}
 		});
 	});
@@ -190,14 +221,23 @@ var init = function(user) {
 				// get at most 100 messages
 				this.db.getRecentMessages({groupId: groupId, userId: user.userId,
 					nbMessages: nbMessageMax, lock: true}, callback);
+			},
+			function(result, fields, callback) {
+				var messages = lib.filterMessagesData(result);
+				var event = user.emitter.pushEvent('readRecentMessage',
+						{status: 'success', groupId: groupId, messages: messages});
+				
+				callback(null, event);
 			}
 		],
-		function(err, result) {
+		function(err, event) {
 			if (err) {
+				if (event) {
+					event.cancelEvent();
+				}
 				user.emit('readRecentMessage', {status: 'fail', errorMsg: 'server error'});
 			} else {
-				user.emit('readRecentMessage', {status: 'success', groupId: groupId, 
-					messages: lib.filterMessagesData(result)});
+				event.fireEvent();
 			}
 		});
 	});
@@ -225,13 +265,23 @@ var init = function(user) {
 				// TODO: limit maximum message numbers
 				this.db.getNbreadOfMessages({groupId: groupId, userId: user.userId,
 					startMessageId: startId, endMessageId: endId, lock: true}, callback);
+			},
+			function(result, fields, callback) {
+				var nbReads = result;
+				var event = user.emitter.pushEvent('readNbreadOfMessages',
+						{status: 'success', groupId: groupId, messages: nbReads});
+				
+				callback(null, event);
 			}
 		],
-		function(err, result) {
+		function(err, event) {
 			if (err) {
+				if (event) {
+					event.cancelEvent();
+				}
 				user.emit('readNbreadOfMessages', {status: 'fail', errorMsg: 'server error'});
 			} else {
-				user.emit('readNbreadOfMessages', {status: 'success', groupId: groupId, messages: result});
+				event.fireEvent();
 			}
 		});
 	});
@@ -252,14 +302,22 @@ var init = function(user) {
 		dbManager.trxPattern([
 			function(callback) {
 				// get group member count
-				sendMessage({sendId: sendId, groupId: groupId, user: user, messageType: messageType.textMessage,
+				addMessage({sendId: sendId, groupId: groupId, user: user, messageType: messageType.textMessage,
 					content: content, importance: importance, location: location, db: this.db}, 
 					callback);
 			}
 		],
-		function(err) {
+		function(err, message) {
 			if (err) {
-				console.log('failed to save message\r\n' + err);
+				lib.debug('failed to save message\r\n' + err);
+			} else {
+				// Send message
+				setTimeout(function() {
+				sendMessage({user: user, groupId: groupId, messageId: message.messageId, 
+					sendId: sendId, db: this.db}, function(err) {
+						lib.debug(err);
+					});
+				}, 0);
 			}
 		});
 	});
@@ -281,7 +339,7 @@ var init = function(user) {
 		if (ackStart > ackEnd)
 			return;
 		
-		console.log('groupId ' + groupId + ' ack ' + ackStart + ' ~ ' + ackEnd);
+		lib.debug('groupId ' + groupId + ' ack ' + ackStart + ' ~ ' + ackEnd);
 		
 		dbManager.trxPattern([
 			function(callback) {
@@ -359,13 +417,13 @@ var init = function(user) {
 					newAcks.push({ackStart: ackStart, ackEnd: ackEnd});
 				}
 
-				console.log(newAcks);
+				lib.debug(newAcks);
 
 				this.data.mergedAckStart = mergedAckStart;
 				this.data.mergedAckEnd = mergedAckEnd;
 				this.data.newAcks = newAcks;
 				
-				console.log('merged ' + this.data.mergedAckStart + ' ~ ' + this.data.mergedAckEnd);
+				lib.debug('merged ' + this.data.mergedAckStart + ' ~ ' + this.data.mergedAckEnd);
 				
 				if (this.data.mergedAckStart > this.data.mergedAckEnd) {
 					return callback(new Error('merged ack end is greater than merged ack start'));
@@ -394,7 +452,7 @@ var init = function(user) {
 				function(i, callback) {
 					var ack = acks[i];
 					var ackStart = ack.ackStart;
-					console.log('ack Start ' + ackStart);
+					lib.debug('ack Start ' + ackStart);
 					var ackEnd = ack.ackEnd;
 					
 					async.waterfall([
@@ -418,12 +476,6 @@ var init = function(user) {
 					callback);
 				},
 				callback);
-			},
-			function(data, callback) {
-				var acks = this.data.newAcks;
-				
-				// notify ack to all other members
-				notifyAcks({groupId: groupId, user: user, acks: acks}, callback);
 			}
 		],
 		function(err) {
@@ -442,6 +494,15 @@ var init = function(user) {
 				// NOTE: User must decrement nbNotReadUser for messageAck event.
 				user.emit('ackMessage', {status: 'success', groupId: groupId, 
 					ackStart: ackStart, ackEnd: ackEnd});
+				
+				var acks = this.data.newAcks;
+				
+				// notify ack to all other members
+				setTimeout(function() {
+					notifyAcks({groupId: groupId, user: user, acks: acks}, function() {
+						
+					});
+				});
 			}
 		});
 	});
@@ -466,8 +527,8 @@ var init = function(user) {
 				chatRoom.join({users: [user]}, callback);
 			}
 		],
-		function(err, errSessions) {
-			if (err || errSessions) {
+		function(err) {
+			if (err) {
 				user.emit('joinChat', {status: 'fail',
 					errorMsg: 'failed to join chat, if you are a member, please retry'});
 			} else {
@@ -496,8 +557,8 @@ var init = function(user) {
 				chatRoom.leave({users: [user]}, callback);
 			}
 		],
-		function(err, errSessions) {
-			if (err || errSessions) {
+		function(err) {
+			if (err) {
 				user.emit('leaveChat', {status: 'fail',
 					errorMsg: 'failed to leave chat, if you are a member, please retry'});
 			} else {
@@ -521,18 +582,26 @@ var init = function(user) {
 			function(callback) {
 				this.db.getMemberJoinHistory({groupId: groupId, messageId: messageId,
 					lock: true}, callback);
+			},
+			function(result, fields, callback) {
+				var members = lib.filterUsersData(result);
+				
+				var event = user.emitter.pushEvent('getMemberJoinHistory',
+						{status: 'success', groupId: groupId, messageId: messageId,
+					members: members});
+				
+				callback(null, event);
 			}
 		],
-		function(err, result) {
+		function(err, event) {
 			if (err) {
+				if (event) {
+					event.cancelEvent();
+				}
 				user.emit('getMemberJoinHistory', {status: 'fail',
 					errorMsg: 'failed to get member join history'});
 			} else {
-				var members = lib.filterUsersData(result);
-				var msg = {status: 'success', groupId: groupId, messageId: messageId,
-						members: members};
-				
-				user.emit('getMemberJoinHistory', msg);
+				event.fireEvent();
 			}
 		});
 	});
@@ -546,7 +615,7 @@ var initUser = dbManager.composablePattern(function(pattern, callback) {
 	// when logined, user will automatically join all chatRooms
 	pattern([
 		function(callback) {
-			group.getGroupList({user: user, db: this.db}, callback);
+			group.getGroupList({user: user, lock: true, db: this.db}, callback);
 		},
 		function(groups, callback) {
 			var db = this.db;
@@ -565,15 +634,11 @@ var initUser = dbManager.composablePattern(function(pattern, callback) {
 							db: db}, callback);
 					}
 				],
-				function(err, errSessions) {
+				function(err) {
 					if (err) {
-						console.log('failed to join chat' + err);
+						lib.debug('failed to join chat' + err);
 						throw err;
 					} else {
-						if (errSessions) {
-							chatTryer.pushSessions(group.groupId, errSessions, true);
-						}
-
 						joinGroupIter(i + 1);
 					}
 				});
@@ -585,7 +650,7 @@ var initUser = dbManager.composablePattern(function(pattern, callback) {
 	function(err) {
 		if (err) {
 			// can't fail currently
-			console.log('failed to join chat'+ err);
+			lib.debug('failed to join chat'+ err);
 
 			callback(err);
 		} else {
@@ -594,11 +659,8 @@ var initUser = dbManager.composablePattern(function(pattern, callback) {
 	}, {db: this.data.db});
 });
 
-
-// TODO: max(messageId) + 1 is not alway true, because when user exits
-//       messages of the users are removed -> let messages stay even if the user who sent the messgage has left
 // store message in database and broadcast to all other users
-var sendMessage = dbManager.composablePattern(function(pattern, callback) {
+var addMessage = dbManager.composablePattern(function(pattern, callback) {
 	var user = this.data.user;
 	var groupId = parseInt(this.data.groupId);
 	var messageType = this.data.messageType;
@@ -607,11 +669,7 @@ var sendMessage = dbManager.composablePattern(function(pattern, callback) {
 	var location = this.data.location || null;
 	var date = new Date();
 	var joinMemberUserIds = this.data.joinMemberUserIds || null;
-	var toMe = this.data.toMe;
-	
-	// client defined id for the message
-	// used for identifying message sent feedback
-	var sendId = parseInt(this.data.sendId);
+	var mustBeMember = this.data.mustBeMember != null ? this.data.mustBeMember: true;
 	
 	if (groupId !== groupId)
 		return callback(new Error("failed to parse groupId"));
@@ -628,11 +686,16 @@ var sendMessage = dbManager.composablePattern(function(pattern, callback) {
 			this.data.nbMembers = result[0].nbMembers;
 			
 			// check if the user is member of the group
-			this.db.getGroupMemberByUser({groupId: groupId, userId: user.userId,
-				update: true}, callback);
+			
+			if (mustBeMember) {
+				this.db.getGroupMemberByUser({groupId: groupId, userId: user.userId,
+					update: true}, callback);
+			} else {
+				callback(null, null, null);
+			}
 		},
 		function(result, fields, callback) {
-			if (result.length == 0)
+			if (mustBeMember && result.length == 0)
 				return callback(new Error('You are not member of the group'));
 			
 			this.db.getLastMessageIdByGroupId({groupId: groupId, update: true}, callback);
@@ -660,22 +723,58 @@ var sendMessage = dbManager.composablePattern(function(pattern, callback) {
 			//TODO: put this process into background so that send message processing completes quickly
 			this.db.incrementNbNewMessagesOthers({groupId: groupId, userId: user.userId},
 					callback);
+		}
+	],
+	function(err) {
+		if (err) {
+			lib.debug('failed to save message\r\n' + err);
+			
+			callback(err);
+		} else {
+			callback(null, this.data.message);
+		}
+	}, {db: this.data.db});
+});
+
+//store message in database and broadcast to all other users
+var sendMessage = dbManager.composablePattern(function(pattern, callback) {
+	var user = this.data.user;
+	var groupId = parseInt(this.data.groupId);
+	var messageId = parseInt(this.data.messageId);
+	var toMe = this.data.toMe;
+	
+	// client defined id for the message
+	// used for identifying message sent feedback
+	var sendId = parseInt(this.data.sendId);
+	
+	if (groupId !== groupId)
+		return callback(new Error("failed to parse groupId"));
+
+	pattern([
+		function(callback) {
+			// Get message by message id
+			this.db.getMessageById({groupId: groupId, messageId: messageId,
+				lock: true}, callback);
 		},
 		function(result, fields, callback) {
+			if (result.length == 0) {
+				return callback(new Error("No such message"));
+			}
+			
 			// get active chat
 			var chatRoom = allChatRoom.get(groupId);
 
 			if (!chatRoom)
 				return callback(null);
 			
-			var data = this.data.message;
+			var data = lib.filterMessageData(result[0]);
 			data.user = user;
 			data.toMe = toMe;
 			
 			// sendMessage is sent only when sendId exists
 			if (sendId === sendId) {
 				user.emit('sendMessage', {status: 'success', sendId: sendId, messageId: data.messageId, 
-					date:data.date, nbread: this.data.nbMembers - 1, groupId: groupId});
+					date:data.date, nbread: data.nbread, groupId: groupId});
 			}
 			
 			// broadcast message
@@ -685,7 +784,7 @@ var sendMessage = dbManager.composablePattern(function(pattern, callback) {
 	],
 	function(err) {
 		if (err) {
-			console.log('failed to save message\r\n' + err);
+			lib.debug('failed to send message\r\n' + err);
 
 			if (sendId === sendId) {
 				user.emit('sendMessage', {status: 'fail', sendId: sendId, 
@@ -694,9 +793,9 @@ var sendMessage = dbManager.composablePattern(function(pattern, callback) {
 			
 			callback(err);
 		} else {
-			callback(null, this.data.message);
+			callback(null);
 		}
-	});
+	}, {db: this.data.db});
 });
 
 // user enter group chat invited before
@@ -710,7 +809,7 @@ var joinGroupChat = function(data, callback) {
 	if (users.length == 0)
 		return callback(null, null);
 
-	chatTryer.removeSessions(groupId, users);
+	//chatTryer.removeSessions(groupId, users);
 
 	async.waterfall([
 		// get chat room. create if does not exist
@@ -731,11 +830,11 @@ var joinGroupChat = function(data, callback) {
 			chatRoom.join({users: sessions}, callback);
 		},
 	],
-	function(err, errSessions) {
+	function(err) {
 		if (err) {
 			callback(err);
 		} else {
-			callback(null, errSessions);
+			callback(null);
 		}
 	});
 };
@@ -751,7 +850,7 @@ var leaveGroupChat = function(data, callback) {
 	if (users.length == 0)
 		return callback(null, null);
 
-	chatTryer.removeSessions(groupId, users);
+	//chatTryer.removeSessions(groupId, users);
 
 	var chatRoom;
 	async.waterfall([
@@ -772,17 +871,17 @@ var leaveGroupChat = function(data, callback) {
 
 			chatRoom.leave({users: sessions}, callback);
 		},
-		function(errSessions, callback) {
+		function(callback) {
 			removeGroupChatIfEmpty(chatRoom);
 
-			callback(null, errSessions);
+			callback(null);
 		}
 	],
-	function(err, errSessions) {
+	function(err) {
 		if (err) {
 			callback(err);
 		} else {
-			callback(null, errSessions);
+			callback(null);
 		}
 	});
 };
@@ -835,35 +934,6 @@ var notifyAcks = function(data, callback) {
 	});
 };
 
-// TODO: Undo ack is deprecated
-var undoAcks = function(data, callback) {
-	var user = data.user;
-	var groupId = data.groupId;
-	var acks = data.acks;
-
-	async.waterfall([
-		// check if the user is group member
-		function(callback) {
-			// get active chat
-			var chatRoom = allChatRoom.get(groupId);
-
-			// no active chatRoom
-			if (!chatRoom) {
-				return callback(null);
-			}
-
-			chatRoom.undoAcks({acks: acks, user: user}, callback);
-		},
-	],
-	function(err) {
-		if (err) {
-			callback(err);
-		} else {
-			callback(null);
-		}
-	});
-};
-
 //when user disconnects, exit from every chats
 //input : data.user
 var leaveAllGroupChat = function(data) {
@@ -873,26 +943,20 @@ var leaveAllGroupChat = function(data) {
 	if (!user || !chatRooms)
 		return;
 
-	chatTryer.removeSessionForAll(user);
+	//chatTryer.removeSessionForAll(user);
 
 	for (var i in chatRooms) {
 		var chatRoom = chatRooms[i];
 
 		(function(chatRoom) {
 			//NOTE: leave callback is asynchronously called
-			chatRoom.leave({users: [user]}, function(err, errSessions) {
-				if (errSessions) {
-					chatTryer.pushSessions(groupId, errSessions, false);
-
-					console.log('User exit and leaving chat failed, try again...');
-				}
-
+			chatRoom.leave({users: [user]}, function(err) {
 				removeGroupChatIfEmpty(chatRoom);
 			});
 		})(chatRoom);
 	}
 
-	console.log('exited every group');
+	lib.debug('exited every group');
 };
 
 //if no online members, remove chat
@@ -902,31 +966,42 @@ var removeGroupChatIfEmpty = function(chatRoom) {
 		throw Error('chat room remove failed!');
 };
 
-// when number of online member in group is 0,
-// remove group chat
+// We remove group chat when number of online member in group is 0
 var removeGroupChat = function(chatRoom) {
-	console.log('remove group chat ' + chatRoom.groupId);
+	lib.debug('remove group chat ' + chatRoom.groupId);
 	if (!allChatRoom.remove(chatRoom.groupId))
 		return false;
 
 	return true;
 };
 
+//We remove group chat when group creation error.
+var removeGroupChatByGroupId = function(groupId) {
+	lib.debug('remove group chat ' + chatRoom.groupId);
+	if (!allChatRoom.remove(groupId))
+		return false;
+
+	return true;
+};
+
 var emitJoinContactChat = function(group, user, contact) {
+	var events = [];
 	var sendMsg = lib.filterGroupData(group);
-	
 	var sessions = session.getUserSessions({userId: user.userId});
 
 	// let user know the new group for contact
 	for (var i = 0; i < sessions.length; i++) {
 		var s = sessions[i];
 
-		s.emit('joinContactChat', {status: 'success', 
+		events.push(s.pushEvent('joinContactChat', {status: 'success', 
 			contactId: contact.contactId, group: sendMsg,
-			userId: contact.userId});
+			userId: contact.userId}));
 	}
+	
+	return events;
 }
 
+/*
 // background process trying to join or leave chat
 var chatTryer = (function() {
 	var requests = []; // remaining [groupId, session] to join
@@ -1028,18 +1103,18 @@ var chatTryer = (function() {
 		removeSessions: removeSessions,
 		removeSessionForAll: removeSessionForAll,
 		removeSessionsForAll: removeSessionsForAll};
-})();
+})(); */
 
 module.exports = {init: init,
 		messageType: messageType,
 		initUser: initUser,
 		joinGroupChat: joinGroupChat,
+		addMessage: addMessage,
 		sendMessage: sendMessage,
 		leaveGroupChat: leaveGroupChat,
 		leaveAllGroupChat: leaveAllGroupChat,
-		notifyAcks: notifyAcks,
-		undoAcks: undoAcks,
-		chatTryer: chatTryer};
+		removeGroupChatByGroupId: removeGroupChatByGroupId,
+		notifyAcks: notifyAcks};
 
 
 //Léo try to communicate with Android

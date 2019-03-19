@@ -143,7 +143,7 @@ function init(user) {
 					return;
 				}
 				
-				this.db.getUserBySession({sessionId: sessionId}, callback);
+				this.db.getUserBySession({sessionId: sessionId, update: true}, callback);
 			},
 			function(result, fields, callback) {
 				if (result.length == 0)
@@ -175,7 +175,7 @@ function init(user) {
 			}
 		], function(err) {
 			if (err) {
-				console.log(err.message);
+				lib.debug(err.message);
 				user.login = userState.LOGOUT;
 				return user.emit('sessionLogin', {status: 'fail', errorMsg: 'failed to login'});
 			} else {
@@ -210,7 +210,7 @@ function init(user) {
 	
 	user.on('disconnect', function() {
 		if (!logined(user)) {
-			console.log('anonymous user ' + user.id + ' disconnected');
+			lib.debug('anonymous user ' + user.id + ' disconnected');
 		} else {
 			// leave every online chat
 			dbManager.trxPattern([
@@ -269,12 +269,12 @@ var loginUser = dbManager.composablePattern(function(pattern, oCallback) {
 	], 
 	function(err) {
 		if (err) {
-			console.log(err);
-			console.log(user.email + ' joining group failed');
+			lib.debug(err);
+			lib.debug(user.email + ' joining group failed');
 			
 			return oCallback(new Error('Failed to init user'));
 		} else {
-			console.log(user.email + ' joined groups');
+			lib.debug(user.email + ' joined groups');
 			return oCallback(null, user);
 		}
 	}, {db: db});
@@ -285,8 +285,6 @@ var logoutUser = dbManager.composablePattern(function(pattern, oCallback) {
 	var db = this.data.db;
 	var email = user.email;
 	//TODO: leaving group chat and removing user session should work in callback pattern
-	//vulnerability: if leaving group fails and if user logins again, user may get messages
-	//               for some other user
 	chatManager.leaveAllGroupChat({user: user});
 	removeUserSession(user);
 	
@@ -367,6 +365,10 @@ function addUserSession(user) {
 function getUserSessions(user, mustExist) {
 	var sessions = users.get(user.userId);
 	
+	if (!user) {
+		return [];
+	}
+	
 	if (mustExist && (!sessions || sessions.indexOf(user) < 0))
 		throw Error('user session get failed, but user is alive');
 	
@@ -376,6 +378,10 @@ function getUserSessions(user, mustExist) {
 //mustExist : every user should have at least one session
 function getUsersSessions(users, mustExist) {
 	var sessionSum = [];
+	
+	if (!users) {
+		return sessionSum;
+	}
 	
 	for (var i = 0; i < users.length; i++) {
 		var user = users[i];
@@ -433,21 +439,38 @@ function ValidateEmail(mail)
 	return false;
 }
 
+var eventProto = {
+	user: null,
+	eventName: null,
+	data: null,
+	ready: false,
+	setData: function(data) {
+		this.data = data;
+	},
+	fireEvent: function() {
+		this.user.emitter.fireEvent(this);
+	},
+	cancelEvent: function() {
+		this.user.emitter.cancelEvent(this);
+	}
+};
+
+var eventConstructor = function(user, eventName, data) {
+	this.user = user;
+	this.eventName = eventName;
+	this.data = data;
+	this.ready = false;
+}
+
+eventConstructor.prototype = eventProto;
+
 
 var eventEmitterProto = {
 	user: null,
 	eventQueue: null,
-	eventConstructor: function(user, eventName, data) {
-		this.user = user;
-		this.eventName = eventName;
-		this.data = data;
-		this.ready = false;
-		this.setData = function(data) {
-			this.data = data;
-		}
-	},
 	pushEvent: function(eventName, data) {
-		var event = new this.eventConstructor(this.user, eventName, data);
+		// Create event and push into event queue
+		var event = new eventConstructor(this.user, eventName, data);
 		this.eventQueue.push(event);
 		return event;
 	},
