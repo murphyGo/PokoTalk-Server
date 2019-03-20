@@ -73,14 +73,14 @@ var server = require('https').createServer(options, app);
 var io = require('socket.io')(server);
 
 app.get('/', function(req, res){
-	console.log('https request');
+	lib.debug('https request');
 	res.send('<h1>Hello world</h1>');
 });
 
 
 //initialize user connection
 io.on('connection', function(user) {
-	console.log('user connected');
+	lib.debug('user connected');
 	
 	session.init(user);
 	contact.init(user);
@@ -99,3 +99,4 @@ var group = require('./group');
 var event = require('./event');
 var chatManager = require('./chatManager');
 var chat = require('./chat');
+var lib = require('./lib');

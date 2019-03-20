@@ -12,17 +12,23 @@ var users;
 var userState = {
 	LOGOUT: 0,
 	LOGING: 1,
-	LOGIN: 2
+	LOGIN: 2,
+	LOGINGOUT: 3,
 };
 
 var hashRound = 10;
 
 function init(user) {
+	// Initialize user state
 	user.state = userState.LOGOUT;
+	
+	// Add event emitter for user
+	var emitter = eventEmitterGen(user);
+	user.emitter = emitter;
 	
 	// User creates account
 	user.on('registerAccount', function(data) {
-		if (logined(user)) {
+		if (!logouted(user)) {
 			lib.debug('user ' + user.email + ' is already logined');
 			return;
 		}
@@ -58,19 +64,26 @@ function init(user) {
 			function(result, fields, callback) {	
 				if (result.affectedRows == 0) 
 					return callback(new Error('Failed'));
-				callback(null);
+				
+				var event = user.emitter.pushEvent('registerAccount', {status: 'success'});
+				
+				callback(null, event);
 			}
-		], function(err){
+		], function(err, event){
 			if (err) {
+				if (event) {
+					event.cancelEvent();
+				}
 				user.emit('registerAccount', {status: 'fail', errorMsg: 'failed to register'});
+			} else {
+				event.fireEvent();
 			}
-			user.emit('registerAccount', {status: 'success'});
 		});
 	});
 	
 	//TODO: vulnerability, attacker may send big amount of this event to attack database
 	user.on('passwordLogin', function(data) {
-		if (logined(user)) {
+		if (!logouted(user)) {
 			lib.debug('user ' + user.email + ' is already logined');
 			return;
 		}
@@ -117,12 +130,26 @@ function init(user) {
 				this.data.userInfo.sessionId = sessionId;
 				this.db.addSession({sessionId: sessionId, userId: this.data.userInfo.id, expire: date}, callback);
 			},
-		], function(err) {
-			if (err) 
-				return user.emit('passwordLogin', {status: 'fail', errorMsg: 'failed to login'});
-			
-			user.emit('passwordLogin', {status: 'success', sessionId: this.data.userInfo.sessionId, 
-				sessionExpire: this.data.userInfo.sessionExpire});
+			function(result, fields, callback) {
+				if (result.affectedRows == 0)
+					return callback(new Error('Failed to create session id'));
+				
+				var data = {status: 'success', sessionId: this.data.userInfo.sessionId, 
+						sessionExpire: this.data.userInfo.sessionExpire};
+				
+				var event = user.emitter.pushEvent('passwordLogin', data);
+				
+				callback(null, event);
+			}
+		], function(err, event) {
+			if (err) {
+				if (event) {
+					event.cancelEvent();
+				}
+				user.emit('passwordLogin', {status: 'fail', errorMsg: 'failed to login'});
+			} else {
+				event.fireEvent();
+			}
 		});
 	});
 	
@@ -131,6 +158,8 @@ function init(user) {
 			return user.emit('sessionLogin', {status:'fail', errorMsg: 'you\'re trying to login'});
 		if (user.login == userState.LOGIN)
 			return user.emit('sessionLogin', {status:'fail', errorMsg: 'you\'d logined already'});
+		if (user.login == userState.LOGINGOUT)
+			return user.emit('sessionLogin', {status:'fail', errorMsg: 'you\'re trying to logout'});
 		
 		var sessionId = data.sessionId;
 		user.login = userState.LOGING;
@@ -171,17 +200,29 @@ function init(user) {
 				if (result.affectedRows == 0)
 					return callback(new Error('Failed to update session expire date'));
 				
+				var data = {status: 'success', user: lib.filterUserData(this.data.userInfo),
+						sessionId: this.data.userInfo.sessionId, 
+						sessionExpire: this.data.userInfo.sessionExpire};
+				
+				var event = user.emitter.pushEvent('sessionLogin', data);
+				
+				this.data.event = event;
+				
 				loginUser({user: user, userInfo: this.data.userInfo, db: this.db}, callback);
-			}
+			},
 		], function(err) {
+			var event = this.data.event;
+			
 			if (err) {
-				lib.debug(err.message);
+				if (event) {
+					event.cancelEvent();
+				}
 				user.login = userState.LOGOUT;
-				return user.emit('sessionLogin', {status: 'fail', errorMsg: 'failed to login'});
+				user.emit('sessionLogin', {status: 'fail', errorMsg: 'failed to login'});
+				lib.debug(err.message);
 			} else {
 				user.login = userState.LOGIN;
-				user.emit('sessionLogin', {status: 'success', user: user.getUserInfo(),
-					sessionId: user.sessionId, sessionExpire: user.sessionExpire});
+				event.fireEvent();
 				lib.debug('user logined with sessionId ' + sessionId);
 			}
 		});
@@ -193,38 +234,53 @@ function init(user) {
 			return;
 		}
 		
+		// User is now not allowed to emit any event that is handled when logined
+		user.login = userState.LOGINGOUT;
+		
 		dbManager.trxPattern([
 			function(callback) {
+				// Logout user
 				logoutUser({db: this.db, user: user}, callback);
 			}
-		], function(err) {
+		], function(err, event) {
 			if (err) {
+				if (event) {
+					event.cancelEvent();
+				}
+				
 				user.emit('logout', {status: 'fail', errorMsg: 'logout fail'});
-				lib.debug('user ' + user.email + ' failed to logout');
+				lib.debug('user ' + user.email + ' failed to logout, disconnect');
 			} else {
-				user.login = userState.LOGOUT;
-				user.emit('logout', {status: 'success'});
+				event.fireEvent();
 			}
+			
+			user.login = userState.LOGOUT;
+			// Logout, so disconnect, regardless of success or fail.
+			// When user want to login again, user should reconnect.
+			user.disconnect();
 		})
 	});
 	
 	user.on('disconnect', function() {
 		if (!logined(user)) {
+			user.login = userState.LOGOUT;
 			lib.debug('anonymous user ' + user.id + ' disconnected');
 		} else {
-			// leave every online chat
+			var email = user.email;
+			
 			dbManager.trxPattern([
 				function(callback) {
+					// Logout user
 					logoutUser({db: this.db, user: user}, callback);
 				}
 			], function(err) {
-				if (err)
-					lib.debug('user ' + user.email + ' failed to logout');
-				else 
-					lib.debug('user ' + user.email + ' logout');
+				user.login = userState.LOGOUT;
+				if (err) {
+					lib.debug('user ' + email + ' failed to logout');
+				} else {
+					lib.debug('user ' + email + ' disconnected');
+				}
 			});
-			
-			lib.debug('user ' + user.email + ' disconnected');
 		}
 	});
 }
@@ -234,7 +290,8 @@ var loginUser = dbManager.composablePattern(function(pattern, oCallback) {
 	var user = this.data.user;
 	var userInfo = this.data.userInfo;
 	var db = this.data.db;
-	// login
+	
+	// Set user data
 	user.userId = userInfo.id;
 	user.email = userInfo.email;
 	user.nickname = userInfo.nickname;
@@ -244,17 +301,13 @@ var loginUser = dbManager.composablePattern(function(pattern, oCallback) {
 	user.sessionExpire = userInfo.sessionExpire;
 	user.state = userState.LOGIN;
 	
-	// returns object of data only available to other contacts
+	// Set functoin that returns object of data only available to other contacts
 	user.getUserInfo = function() {return lib.filterUserData(this);};
 
-	// add to user session pool
+	// Add the user to session pool
 	if (!addUserSession(user)) {
 		return oCallback(new Error('Failed to add user session'));
 	}
-	
-	// add user emitter
-	var emitter = eventEmitterGen(user);
-	user.emitter = emitter;
 	
 	lib.debug('user ' + user.email + ' logined');
 	
@@ -262,20 +315,15 @@ var loginUser = dbManager.composablePattern(function(pattern, oCallback) {
 		function(callback) {
 			// join every active group the user belongs to
 			chatManager.initUser({user: user, db: db}, callback);
-		},
-		function(callback) {
-			event.initUser({user: user, db: db}, callback);
 		}
 	], 
 	function(err) {
 		if (err) {
 			lib.debug(err);
-			lib.debug(user.email + ' joining group failed');
-			
 			return oCallback(new Error('Failed to init user'));
 		} else {
 			lib.debug(user.email + ' joined groups');
-			return oCallback(null, user);
+			return oCallback(null);
 		}
 	}, {db: db});
 });
@@ -284,9 +332,16 @@ var logoutUser = dbManager.composablePattern(function(pattern, oCallback) {
 	var user = this.data.user;
 	var db = this.data.db;
 	var email = user.email;
+	
 	//TODO: leaving group chat and removing user session should work in callback pattern
+	
+	// NOTE: Even though we clear event queue and remove user from session pool and chat,
+	// server might try to send some event to this connection which is being handled concurrently.
 	chatManager.leaveAllGroupChat({user: user});
 	removeUserSession(user);
+	user.emitter.clear();
+	
+	var event = user.emitter.pushEvent('logout', {status:'success'});
 	
 	lib.debug('user ' + email + ' logout');
 	
@@ -304,7 +359,7 @@ var logoutUser = dbManager.composablePattern(function(pattern, oCallback) {
 			user.state = userState.LOGOUT;
 			user.getUserInfo = null;
 			
-			callback(null);
+			callback(null, event);
 		}
 	], 
 	function(err) {
@@ -322,6 +377,14 @@ function logined(user) {
 	}
 	return false;
 }
+
+function logouted(user) {
+	if (user.state == userState.LOGOUT) {
+		return true;
+	}
+	return false;
+}
+
 
 function validateData(data) {
 	if (data === undefined ||
@@ -428,6 +491,7 @@ function removeAllUserSession(user) {
 }
 
 function initSession() {
+	// Create user session data structure implemeted by Red-Black tree
 	users = rbTree.createRBTree();
 }
 
@@ -514,6 +578,10 @@ var eventEmitterProto = {
 				setTimeout(function() {emitter.fireEvent(nextEvent)}, 0);
 			}
 		}
+	},
+	clear: function() {
+		// Clear event queue
+		this.eventQueue.length = 0;
 	}
 };
 

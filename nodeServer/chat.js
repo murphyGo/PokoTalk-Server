@@ -153,7 +153,7 @@ var chatRoomProto = {
 				'membersJoin', {status: 'success', groupId: chatRoom.groupId, 
 					members: lib.filterUsersData(sessions)});
 				
-				chatRoom.printMembers();
+				//chatRoom.printMembers();
 				
 				return callback(null);
 				
@@ -202,7 +202,7 @@ var chatRoomProto = {
 						{status: 'success', groupId: chatRoom.groupId, 
 					members: lib.filterUsersData(sessions)});
 				
-				chatRoom.printMembers();
+				//chatRoom.printMembers();
 				
 				return callback(null);
 				

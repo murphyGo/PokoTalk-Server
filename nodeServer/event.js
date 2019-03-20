@@ -19,11 +19,24 @@ function init(user) {
 		if (!session.validateRequest('getEventList', user, false))
 			return;
 
-		getEventList({userId: user.userId, db: this.db}, function(err, eventList) {
+		dbManager.trxPattern([
+			function(callback) {
+				getEventList({userId: user.userId, db: this.db}, callback);
+			},
+			function(eventList, callback) {
+				var event = user.pushEvent('getEventList', {status: 'success', events: eventList});
+				
+				callback(null, event);
+			}
+		],
+		function(err, event) {
 			if (err) {
+				if (event) {
+					event.cancelEvent();
+				}
 				user.emit('getEventList', {status: 'fail', errorMsg: 'server error'});
 			} else {
-				user.emit('getEventList', {status: 'success', events: eventList});
+				event.fireEvent();
 			}
 		});
 	});
@@ -43,9 +56,17 @@ function init(user) {
 			var location = localization.location;
 			var ldate = localization.date;
 		}
+		
+		// ParseInt returns NaN if it is not number
+		date = parseInt(date);
+		ldate = parseInt(ldate);
+		
+		// Check if NaN
+		if (date !== date || ldate !== ldate)
+			return;
 
-		date = new Date(parseInt(date));
-		ldate = new Date(parseInt(ldate));
+		date = new Date(date);
+		ldate = new Date(ldate);
 
 		if (nbParticipantsMax !== nbParticipantsMax ||
 				(localization && !location) ||
@@ -127,20 +148,32 @@ function init(user) {
 
 				event = lib.filterEventData(event);
 
-				// notify every online participants
+				// user events to emit
+				var userEvents = [];
+				
+				// push user events
 				sessions.forEach(function(session) {
-					session.emit('eventCreated', event);
+					userEvents.push(session.emitter.pushEvent('eventCreated', event));
 				});
 
 				// send email to every participants in background
 				eventManager.sendMailAsync(event);
 
-				callback(null);
+				callback(null, userEvents);
 			}
 		],
-		function(err) {
+		function(err, userEvents) {
 			if (err) {
+				if (userEvents) {
+					for (var i in userEvents) {
+						userEvents[i].cancelEvent();
+					}
+				}
 				user.emit('createEvent', {status: 'fail', errorMsg: 'server error'});
+			} else {
+				for (var i in userEvents) {
+					userEvents[i].fireEvent();
+				}
 			}
 		});
 	});
@@ -198,33 +231,70 @@ function init(user) {
 				var userSessions = session.getUserSessions(user);
 				var sessions = session.getUsersSessions(this.data.participants);
 
+				var userEvents = [];
+				
 				// notify exited user
 				userSessions.forEach(function(user) {
-					user.emit('eventExit', {status: 'success', eventId: eventId});
+					userEvents.push(user.emitter.pushEvent('eventExit', 
+							{status: 'success', eventId: eventId}));
 				});
-
+				
 				// notify other participants
 				sessions.forEach(function(user) {
 					if (userSessions.indexOf(user) >= 0)
 						return;
 
-					user.emit('eventParticipantExited', {eventId: eventId, userId: user.userId});
+					userEvents.push(user.emitter.pushEvent('eventParticipantExited', 
+							{eventId: eventId, userId: user.userId}));
 				});
 
-				callback(null);
+				callback(null, userEvents);
 			}
 		],
-		function(err) {
+		function(err, userEvents) {
 			if (err) {
+				if (userEvents) {
+					for (var i in userEvents) {
+						userEvents[i].cancelEvent();
+					}
+				}
 				user.emit('eventExit', {status: 'fail', errorMsg: 'server error'});
 			} else {
+				for (var i in userEvents) {
+					userEvents[i].fireEvent();
+				}
+				
 				var groupId = this.data.event.groupId;
 				// if event has a group, exit from the group
 				if (groupId) {
 					setTimeout(function() {
 						group.exitGroup({groupId: groupId, user: user, trx: true},
 								function(err, message, events) {
-							
+							if (err) {
+								if (events) {
+									for (var i in events) {
+										events[i].cancelEvent();
+									}
+								}
+							} else {
+								for (var i in events) {
+									events[i].fireEvent();
+								}
+								
+								if (message) {
+									// Send member exit message
+									setTimeout(function() {
+										lib.debug(message);
+										chatManager.sendMessage({user: user, groupId: groupId, 
+											messageId: message.messageId, trx: true}, 
+											function(err) {
+												if(err) {
+													lib.debug(err);
+												}
+											});
+									}, 0);
+								}
+							}
 						});
 					},
 					0);
@@ -280,40 +350,32 @@ function init(user) {
 
 				var sessions = session.getUserSessions(user);
 
+				var userEvents = [];
 				// notify user ack
 				sessions.forEach(function(user) {
-					user.emit('eventAck', {status: 'success', eventId: eventId, acked: ack});
+					userEvents.push(user.emitter.pushEvent('eventAck', 
+							{status: 'success', eventId: eventId, acked: ack}));
 				});
 
-				callback(null);
+				callback(null, userEvents);
 			}
 		],
-		function(err) {
+		function(err, userEvents) {
 			if (err) {
+				if (userEvents) {
+					for (var i in userEvents) {
+						userEvents[i].cancelEvent();
+					}
+				}
 				user.emit('eventAck', {status: 'fail', errorMsg: 'server error'});
+			} else {
+				for (var i in userEvents) {
+					userEvents[i].fireEvent();
+				}
 			}
 		});
 	});
 }
-
-var initUser = dbManager.composablePattern(function(pattern, callback) {
-	var user = this.data.user;
-
-	pattern([
-		function(callback) {
-			getEventList({userId: user.userId, db: this.db}, callback);
-		}
-	],
-	function(err, eventList) {
-		if (err) {
-			user.emit('getEventList', {status: 'fail', errorMsg: 'server error'});
-		} else {
-			user.emit('getEventList', {status: 'success', events: eventList});
-		}
-
-		callback(err);
-	}, {db: this.data.db});
-});
 
 // get event list of user
 var getEventList = dbManager.composablePattern(function(pattern, callback) {
@@ -553,12 +615,16 @@ var eventManager = {
 					var date = this.data.date;
 
 					if (event.date <= date) {
-						manager.startEvent({event: event, db: db}, callback);
+						setTimeout(function() {
+							manager.startEvent({event: event, trx: true}, function(err) {
+								lib.debug("event start error " + err);
+							}, 0);
+						});
 					} else {
 						manager.reserveEvent(event);
-
-						callback(null);
 					}
+					
+					callback(null);
 				},
 				callback);
 			}
@@ -582,7 +648,7 @@ var eventManager = {
 
 		// when left <= 0, setTimeout scheduled immediately as next
 		setTimeout(function() {
-			manager.startEvent({event: event}, function(err) {
+			manager.startEvent({event: event, trx: true}, function(err) {
 				var index = manager.upcomingEvents.indexOf(event);
 
 				if (index >= 0)
@@ -619,9 +685,8 @@ var eventManager = {
 					members: participants.map(function(p) {return p.email;}),
 					db: this.db}, callback);
 			},
-			function(group, sessions, callback) {
+			function(group, callback) {
 				this.data.group = group;
-				this.data.sessions = sessions;
 				var groupId = group.groupId;
 
 				// update started bit
@@ -642,34 +707,65 @@ var eventManager = {
 				getEvent({eventId: eventId, db: this.db}, callback);
 			},
 			function(event, callback) {
-				var sessions = this.data.sessions;
 				var group = this.data.group;
 				var participants = this.data.participants;
 				var extend = require('util')._extend;
+				
+				var sessions = session.getUsersSessions(group.members);
 
+				var userEvents = [];
 				// notify users new group and that the event has been started
-				sessions.forEach(function(user) {
+				sessions.forEach(function(member) {
 					var copiedEvent = extend({}, event);
 
 					// find participant info matching user and set ack attribute
 					for (var i = 0; i < participants.length; i++) {
 						var participant = participants[i];
 
-						if (participant.userId == user.userId) {
+						if (participant.userId == member.userId) {
 							copiedEvent.acked = participant.acked.readUIntLE(0, 1);
 
-							user.emit('addGroup', {status: 'success', group: group});
-							user.emit('eventStarted', copiedEvent);
+							userEvents.push(member.emitter.pushEvent('addGroup', 
+									{status: 'success', group: group}));
+							userEvents.push(member.emitter.pushEvent('eventStarted', 
+									copiedEvent));
 
 							break;
 						}
 					}
 				});
 
-				callback(null);
+				// join every member to group chat
+				chatManager.joinGroupChat({groupId: group.groupId, users: sessions}, function(err) {
+					if (err) {
+						return callback(err, userEvents);
+					} else {
+						return callback(null, userEvents);
+					}
+				});
 			}
 		],
-		function(err) {
+		function(err, userEvents) {
+			if (err) {
+				if (userEvents) {
+					for (var i in userEvents) {
+						userEvents[i].cancelEvent();
+					}
+				}
+				
+				var group = this.data.group;
+				if (group) {
+					// remove group chat
+					chatManager.removeGroupChatByGroupId(group.groupId);
+				}
+				
+				lib.debug('start reserved event failed');
+				lib.debug(err);
+			} else {
+				for (var i in userEvents) {
+					userEvents[i].fireEvent();
+				}
+			}
 			callback(err);
 		});
 	}),
@@ -771,8 +867,7 @@ var eventManager = {
 	eventManager.init();
 })();
 
-module.exports = {init: init,
-		initUser: initUser};
+module.exports = {init: init};
 
 var session = require('./session');
 var chatManager = require('./chatManager');

@@ -60,11 +60,23 @@ function init(user) {
 		if (!session.validateRequest('addGroup', user, true, data))
 			return;
 		
+		var name = data.name;
+		var members = data.members;
+		
+		// Check if name is String
+		if (name != null && typeof name != 'string') {
+			return;
+		}
+		
+		// Check if members is Array
+		if (members != null && typeof members != 'object' && members.constructor != Array) {
+			return;
+		}
+		
 		dbManager.trxPattern([
 			function(callback) {
 				// add user itself to group
-				data.user = user;
-				data.db = this.db;
+				var data = {user: user, name: name, members: members, db: this.db};
 				
 				addGroup(data, callback);
 			},

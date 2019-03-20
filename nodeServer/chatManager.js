@@ -993,7 +993,7 @@ var emitJoinContactChat = function(group, user, contact) {
 	for (var i = 0; i < sessions.length; i++) {
 		var s = sessions[i];
 
-		events.push(s.pushEvent('joinContactChat', {status: 'success', 
+		events.push(s.emitter.pushEvent('joinContactChat', {status: 'success', 
 			contactId: contact.contactId, group: sendMsg,
 			userId: contact.userId}));
 	}
