@@ -24,19 +24,14 @@ function init(user) {
 				getEventList({userId: user.userId, db: this.db}, callback);
 			},
 			function(eventList, callback) {
-				var event = user.pushEvent('getEventList', {status: 'success', events: eventList});
+				this.pushEvent(user, 'getEventList', {events: eventList});
 				
-				callback(null, event);
+				callback(null);
 			}
 		],
-		function(err, event) {
+		function(err) {
 			if (err) {
-				if (event) {
-					event.cancelEvent();
-				}
-				user.emit('getEventList', {status: 'fail', errorMsg: 'server error'});
-			} else {
-				event.fireEvent();
+				user.emitFail('getEventList', 'server error');
 			}
 		});
 	});
@@ -45,7 +40,7 @@ function init(user) {
 	user.on('createEvent', function(data) {
 		if (!session.validateRequest('createEvent', user, true, data))
 			return;
-
+		lib.debug(data);
 		var emails = data.participants;
 		var nbParticipantsMax = parseInt(data.nbParticipantsMax || 128);
 		var name = data.name;
@@ -55,30 +50,39 @@ function init(user) {
 		if (localization) {
 			var location = localization.location;
 			var ldate = localization.date;
+			var ltitle = localization.title;
+			var lcategory = localization.category;
+			var ldescription = localization.description;
+			var latitude = localization.latitude;
+			var longitude = localization.longitude;
 		}
 		
 		// ParseInt returns NaN if it is not number
 		date = parseInt(date);
 		ldate = parseInt(ldate);
 		
+		// Set meeting date to chat date if not given
+		if (!ldate) {
+			ldate = date;
+		}
+		
 		// Check if NaN
 		if (date !== date || ldate !== ldate)
 			return;
-
+		
 		date = new Date(date);
 		ldate = new Date(ldate);
 
 		if (nbParticipantsMax !== nbParticipantsMax ||
-				(localization && !location) ||
 				(localization && isNaN(ldate.getTime())) ||
 				!lib.isArray(emails) ||
 				isNaN(date.getTime()) ||
 				!name)
 			return;
-
+		
 		if (date !== date || (localization && ldate !== ldate))
 			return;
-
+		
 		// remove invalid emails
 		emails = emails.filter(function(email) {return email;});
 
@@ -89,7 +93,7 @@ function init(user) {
 			},
 			function(participants, callback) {
 				this.data.participants = participants;
-
+				
 				// add the user if not contained
 				if (!lib.containsUser(user, participants))
 					participants.push(lib.filterUserData(user));
@@ -111,16 +115,18 @@ function init(user) {
 				var participants = this.data.participants;
 				var eventId = result[0].lastInsertId;
 				this.data.eventId = eventId;
-
+				
 				addParticipants({eventId: eventId, participants: participants,
 					db: this.db}, callback);
 			},
 			function(callback) {
 				var eventId = this.data.eventId;
-
+				
 				if (localization)
 					this.db.addEventLocalization({eventId: eventId,
-						location: location, date: ldate}, callback);
+						location: location, date: ldate, title: ltitle,
+						category: lcategory, description: ldescription,
+						latitude: latitude, longitude: longitude}, callback);
 				else
 					callback(null, null, null);
 			},
@@ -133,7 +139,9 @@ function init(user) {
 
 				var event = result[0];
 				var participants = this.data.participants;
-				var localData = (localization ? {location: location, date: ldate} : null);
+				var localData = (localization ? {location: location, date: ldate, 
+					title: ltitle, category: lcategory, description: ldescription, 
+					latitude: latitude, longitude: longitude} : null);
 
 				event.participants = participants;
 				event.localization = localData;
@@ -148,32 +156,22 @@ function init(user) {
 
 				event = lib.filterEventData(event);
 
-				// user events to emit
-				var userEvents = [];
+				var pattern = this;
 				
 				// push user events
 				sessions.forEach(function(session) {
-					userEvents.push(session.emitter.pushEvent('eventCreated', event));
+					pattern.pushEvent(session, 'eventCreated', event);
 				});
 
 				// send email to every participants in background
 				eventManager.sendMailAsync(event);
 
-				callback(null, userEvents);
+				callback(null);
 			}
 		],
-		function(err, userEvents) {
+		function(err) {
 			if (err) {
-				if (userEvents) {
-					for (var i in userEvents) {
-						userEvents[i].cancelEvent();
-					}
-				}
-				user.emit('createEvent', {status: 'fail', errorMsg: 'server error'});
-			} else {
-				for (var i in userEvents) {
-					userEvents[i].fireEvent();
-				}
+				user.emitFail('createEvent', 'server error');
 			}
 		});
 	});
@@ -240,12 +238,12 @@ function init(user) {
 				});
 				
 				// notify other participants
-				sessions.forEach(function(user) {
-					if (userSessions.indexOf(user) >= 0)
+				sessions.forEach(function(session) {
+					if (userSessions.indexOf(session) >= 0)
 						return;
 
-					userEvents.push(user.emitter.pushEvent('eventParticipantExited', 
-							{eventId: eventId, userId: user.userId}));
+					userEvents.push(session.emitter.pushEvent('eventParticipantExited', 
+							{status: 'success', eventId: eventId, userId: user.userId}));
 				});
 
 				callback(null, userEvents);
@@ -636,6 +634,21 @@ var eventManager = {
 		});
 	},
 	upcomingEvents: [],
+	setBigTimeout: function(fn, delay) {
+	    var maxDelay = Math.pow(2,31)-1;
+	    var eventManager = this;
+
+	    if (delay > maxDelay) {
+	        var args = arguments;
+	        args[1] -= maxDelay;
+
+	        return setTimeout(function () {
+	        	eventManager.setBigTimeout.apply(undefined, args);
+	        }, maxDelay);
+	    }
+
+	    return setTimeout.apply(undefined, arguments);
+	},
 	reserveEvent: function(event) {
 		var now = new Date();
 		var fire = event.date;
@@ -647,7 +660,7 @@ var eventManager = {
 		this.upcomingEvents.push(event);
 
 		// when left <= 0, setTimeout scheduled immediately as next
-		setTimeout(function() {
+		this.setBigTimeout(function() {
 			manager.startEvent({event: event, trx: true}, function(err) {
 				var index = manager.upcomingEvents.indexOf(event);
 
@@ -775,8 +788,20 @@ var eventManager = {
 		var mailTemplate = this.mailTemplate;
 
 		setTimeout(function() {
-			// gmail account id: homingpigeonHelper@gamil.com, password: udomk0yFQCK87yxwp4Fz
-			var transporter = nodemailer.createTransport('smtps://homingpigeonHelper%40gmail.com:udomk0yFQCK87yxwp4Fz@smtp.gmail.com');
+			// gmail account id: homingpigeonHelper@gamil.com, password: vXNiwtYvVGyFoOOi
+			var transporter = nodemailer.createTransport({
+			    host: 'smtp.gmail.com',
+			    port: 465,
+			    secure: true,
+			    auth: {
+			        type: 'OAuth2',
+			        user: 'homingpigeonHelper@gmail.com',
+			        clientId: '1011365814978-8b75dajd3gc1k6sumcshp6nbc4v4c1or.apps.googleusercontent.com',
+			        clientSecret: '4TtS1nF6iQ3OPdc2Q3K-ShZY',
+			        refreshToken: '1%2FQ5N2r4_s4rr5_aJt9b6i_AXz6u8GjP6ePpICiDPyQDy_GVx47p9eS238kO0d0d1M',
+			        accessToken: 'ya29.GlvcBrasmnxTvLajv1qVn_XV3CTFBB1xHwHtV7lhrcucX4XpIusKvTx3mKAX_qINSUe3BId1pVIeFVjInGxY9b8ht9YkxE31W6od9m1C34J57ECmNrcK6AJjMB50'
+			    }
+			});
 
 			var participants = event.participants.filter(function(p) {return p;});
 			var creater;
@@ -802,6 +827,7 @@ var eventManager = {
 				if (!date)
 					return na;
 
+				date = new Date(date);
 				return date.toDateString() + ' ' + date.toLocaleTimeString();
 			};
 
@@ -868,6 +894,38 @@ var eventManager = {
 })();
 
 module.exports = {init: init};
+
+if (require.main == module) {
+	// Mail send test
+
+	let transporter = nodemailer.createTransport({
+	    host: 'smtp.gmail.com',
+	    port: 465,
+	    secure: true,
+	    auth: {
+	        type: 'OAuth2',
+	        user: 'homingpigeonHelper@gmail.com',
+	        clientId: '1011365814978-8b75dajd3gc1k6sumcshp6nbc4v4c1or.apps.googleusercontent.com',
+	        clientSecret: '4TtS1nF6iQ3OPdc2Q3K-ShZY',
+	        refreshToken: '1%2FQ5N2r4_s4rr5_aJt9b6i_AXz6u8GjP6ePpICiDPyQDy_GVx47p9eS238kO0d0d1M',
+	        accessToken: 'ya29.GlvcBrasmnxTvLajv1qVn_XV3CTFBB1xHwHtV7lhrcucX4XpIusKvTx3mKAX_qINSUe3BId1pVIeFVjInGxY9b8ht9YkxE31W6od9m1C34J57ECmNrcK6AJjMB50'
+	    }
+	});
+
+	let mailOptions = {
+	    from: 'homingpigeonHelper@gmail.com',
+	    to: 'chk8072@naver.com',
+	    subject: 'Test',
+	    text: 'Hello World!'
+	};
+
+	transporter.sendMail(mailOptions, (error, info) => {
+	    if (error) {
+	        return console.log(error.message);
+	    }
+	    console.log('success');
+	});
+}
 
 var session = require('./session');
 var chatManager = require('./chatManager');

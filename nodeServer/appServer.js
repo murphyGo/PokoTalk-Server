@@ -87,6 +87,7 @@ io.on('connection', function(user) {
 	group.init(user);
 	chatManager.init(user);
 	event.init(user);
+	contentManager.init(user);
 });
 
 module.exports = {io: io, server: server, app: app};
@@ -99,4 +100,5 @@ var group = require('./group');
 var event = require('./event');
 var chatManager = require('./chatManager');
 var chat = require('./chat');
+var contentManager = require('./contentManager');
 var lib = require('./lib');

@@ -140,10 +140,11 @@ var init = function(user) {
 						
 						i++;
 						if (i == sessions.length)
-							callback(events);
+							callback(null, events);
 					});
-				} else
-					callback(events);
+				} else {
+					callback(null, events);
+				}
 			}
 		], 
 		function(err, events) {
@@ -206,10 +207,10 @@ var init = function(user) {
 						
 						i++;
 						if (i == sessions.length)
-							callback(events);
+							callback(null, events);
 					});
 				} else
-					callback(events);
+					callback(null, events);
 			}
 		], 
 		function(err, events) {
@@ -243,6 +244,7 @@ var init = function(user) {
 		function(err, events) {
 			if (err) {
 				lib.debug('error when to accept contact\r\n' + err);
+				lib.debug(err);
 				if (events != null) {
 					for (var i in events) {
 						events[i].cancelEvent();
@@ -271,6 +273,7 @@ var init = function(user) {
 		function(err, events) {
 			if (err) {
 				lib.debug('error when to deny contact\r\n' + err);
+				lib.debug(err);
 				if (events != null) {
 					for (var i in events) {
 						events[i].cancelEvent();
@@ -409,14 +412,15 @@ var reactPendingContact = function(data, callback) {
 					
 					i++;
 					if (i == sessions.length)
-						callback(events);
+						callback(null, events);
 				});
-			} else
-				callback(events);
+			} else {
+				callback(null, events);
+			}
 		}
 	],
-	function(err) {
-		callback(err);
+	function(err, events) {
+		callback(err, events);
 	},
 	{db: data.db});
 }

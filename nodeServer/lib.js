@@ -64,10 +64,11 @@ var filterMessagesData = function(messages) {
 var filterEventData = function(event) {
 	var acked = event.acked ? event.acked.readUIntLE(0, 1) : null; 
 	var started = event.started.readUIntLE(0, 1);
+	var date = dateToEpoch(event.date);
 	
 	return {eventId: event.eventId, name: event.name, description: event.description,  
 		nbParticipants: event.nbParticipants, started: started,
-		date: event.date, creater: filterUserData(event.creater), 
+		date: date, creater: filterUserData(event.creater), 
 		participants: filterUsersData(event.participants), 
 		localization: filterLocalizationData(event.localization), 
 		groupId: event.groupId || null, acked: acked};
@@ -97,7 +98,12 @@ var filterLocalizationData = function(localization) {
 	if (!localization)
 		return null;
 	
-	return {location: localization.location, date: localization.date};
+	var date = dateToEpoch(localization.date);
+	
+	return {location: localization.location, date: date,
+		title: localization.title, category: localization.category,
+		description: localization.description, 
+		latitude: localization.latitude, longitude: localization.longitude};
 };
 
 var dateToEpoch = function(date) {

@@ -83,8 +83,13 @@ CREATE TABLE GroupHistory (
 CREATE TABLE Localisations (
     id int NOT NULL AUTO_INCREMENT,
     eventId int,
-    location varchar(25),                      /* Location to meet */
-    date timestamp NOT NULL,                   /* Time for meeting */
+    title varchar(128),                       	/* Location title */
+    category varchar(128),						/* Location category */
+    description varchar(256),					/* Location description */
+    latitude float,								/* Latitude of location */
+    longitude float,							/* Longitude of location */
+    location varchar(25),                      	/* Location to meet */
+    date timestamp NOT NULL,                   	/* Time for meeting */
     CONSTRAINT Localisations_pk PRIMARY KEY (id)
 );
 

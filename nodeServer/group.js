@@ -35,21 +35,17 @@ function init(user) {
 				getGroupList({user: user, db: this.db}, callback);
 			},
 			function(result, callback) {
-				var event = user.emitter.pushEvent('getGroupList', {status: 'success', groups: result});
+				this.pushEvent(user, 'getGroupList', {groups: result});
 				
-				callback(null, event);
+				callback(null);
 			}
 		],
-		function(err, event) {
+		function(err) {
 			if (err) {	
 				lib.debug('failed to get group list\r\n' + err);
-				if (event) {
-					event.canceEvent();
-				}
+
 				user.emit('getGroupList', {status: 'fail', errorMsg:'server error'});
-			} else {
-				event.fireEvent();
-			}
+			} 
 		});
 	});
 	
@@ -94,32 +90,25 @@ function init(user) {
 				this.data.message = message;
 				
 				var group = this.data.group;
-				var events = [];
 				var sessions = session.getUsersSessions(group.members);
 				
 				// notify every online member
 				for (var i = 0; i < sessions.length; i++) {
-					events.push(sessions[i].emitter.pushEvent('addGroup', {status: 'success', group: group}));
+					this.pushEvent(sessions[i], 'addGroup', {group: group});
 				}
 				
 				// join every member to group chat
 				chatManager.joinGroupChat({groupId: group.groupId, users: sessions}, function(err) {
 					if (err) {
-						return callback(err, events);
+						return callback(err);
 					} else {
-						return callback(null, events);
+						return callback(null);
 					}
 				});
 			},
 		],
-		function(err, events) {
+		function(err) {
 			if (err) {
-				if (events) {
-					for (var i in events) {
-						events[i].cancelEvent();
-					}
-				}
-				
 				var group = this.data.group;
 				if (group) {
 					// remove group chat
@@ -128,10 +117,6 @@ function init(user) {
 				
 				user.emit('addGroup', {status: 'fail', errorMsg:'server error'});
 			} else {
-				for (var i in events) {
-					events[i].fireEvent();
-				}
-				
 				var group = this.data.group;
 				var members = group.members;
 				var message = this.data.message;
@@ -215,9 +200,10 @@ function init(user) {
 				var invitedMembers = this.data.invitedMembers;
 				var totalMembers = result;
 				var contact = this.data.contact;
+				var events = [];
 				
 				if (contact) {
-					emitContactChatRemoved(groupId, contact);
+					events = events.concat(emitContactChatRemoved(groupId, contact));
 				}
 				
 				// get every session of every member
@@ -227,8 +213,6 @@ function init(user) {
 				
 				group.members = totalMembers;
 				group = lib.filterGroupData(group);
-				
-				var events = [];
 				
 				// notify every online member
 				for (var i = 0; i < totalSessions.length; i++) {
@@ -275,17 +259,20 @@ function init(user) {
 				}
 				
 				var message = this.data.message;
+				var group = this.data.group;
 				
-				// send join message in background
-				setTimeout(function() {
-					chatManager.sendMessage({user: user, groupId: group.groupId, 
-						messageId: message.messageId, toMe: true, trx: true}, 
-						function(err) {
-							if (err) {
-								lib.debug(err);
-							}
-					});
-				}, 0);
+				if (message) {
+					// send join message in background
+					setTimeout(function() {
+						chatManager.sendMessage({user: user, groupId: group.groupId, 
+							messageId: message.messageId, toMe: true, trx: true}, 
+							function(err) {
+								if (err) {
+									lib.debug(err);
+								}
+						});
+					}, 0);
+				}
 			}
 		});
 	});
@@ -316,14 +303,12 @@ function init(user) {
 				user.emit('exitGroup', {status: 'fail', errorMsg:'server error'});
 			} else {
 				for (var i in events) {
-					lib.debug(events[i]);
 					events[i].fireEvent();
 				}
 				
 				if (message) {
 					// Send member exit message
 					setTimeout(function() {
-						lib.debug(message);
 						chatManager.sendMessage({user: user, groupId: groupId, 
 							messageId: message.messageId, trx: true}, 
 							function(err) {
@@ -798,7 +783,6 @@ var exitGroup = dbManager.composablePattern(function(pattern, callback) {
 			lib.debug('failed to exit from group\r\n' + err);
 			return callback(err);
 		} else {
-			lib.debug(events);
 			return callback(null, message, events);
 		}
 	}, {db: this.data.db});

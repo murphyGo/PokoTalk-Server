@@ -128,7 +128,7 @@ var init = function(user) {
 
 				if (this.data.groupCreated) {
 					// join every member to group chat
-					chatManager.joinGroupChat({groupId: group.groupId, users: sessions}, function(err) {
+					joinGroupChat({groupId: group.groupId, users: sessions}, function(err) {
 						if (err) {
 							return callback(err, events);
 						} else {
@@ -484,7 +484,8 @@ var init = function(user) {
 				if (!err.alreadyAcked) {
 					user.emit('ackMessage', {status: 'fail', errorMsg: 'failed to update ack'});
 				} else {
-					user.emit('ackMessage', {status: 'fail', errorMsg: 'you already acked'});
+					user.emit('ackMessage', {status: 'success', groupId: groupId, 
+						ackStart: ackStart, ackEnd: ackEnd});
 				}
 			} else {
 				// ackMessage just notify the session that ack is completed from ackStart to ackEnd.
@@ -949,7 +950,6 @@ var leaveAllGroupChat = function(data) {
 		var chatRoom = chatRooms[i];
 
 		(function(chatRoom) {
-			//NOTE: leave callback is asynchronously called
 			chatRoom.leave({users: [user]}, function(err) {
 				removeGroupChatIfEmpty(chatRoom);
 			});
@@ -977,7 +977,7 @@ var removeGroupChat = function(chatRoom) {
 
 //We remove group chat when group creation error.
 var removeGroupChatByGroupId = function(groupId) {
-	lib.debug('remove group chat ' + chatRoom.groupId);
+	//lib.debug('remove group chat ' + chatRoom.groupId);
 	if (!allChatRoom.remove(groupId))
 		return false;
 

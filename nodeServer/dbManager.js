@@ -270,7 +270,8 @@ var queries = {
 			"FROM EventParticipants " +
 			"WHERE eventId = ? %",
 	
-	getEventLocalization: "SELECT eventId, location, date " +
+	getEventLocalization: "SELECT eventId, location, date, " +
+			"title, category, description, latitude, longitude " + 
 			"FROM Localisations " +
 			"WHERE eventId = ? %",
 
@@ -588,7 +589,8 @@ var dbPrototype = {
 	addEventLocalization: function(data, callback)  {
 		this.conn.query(queries.addEventLocalization,
 				{eventId:data.eventId, location:data.location,
-			date:data.date}, callback);
+			date:data.date, title:data.title, category:data.category, description: data.description,
+			latitude:data.latitude, longitude:data.longitude}, callback);
 	},
 	removeUser: function(data, callback)  {
 		this.conn.query(queries.removeUser, [data.email], callback);
@@ -697,8 +699,7 @@ var getConnection = function(callback) {
 	var dbInstance = new db();
 	pool.getConnection(function(err, conn) {
 		if (err) {
-			console.log('Failed to get db connection');
-			console.log(err);
+			lib.debug('Failed to get db connection');
 			Object.defineProperty(dbInstance, 'conn',
 					{value: null, configurable: false, writable: false, enumerable: false});
 		} else {
@@ -713,7 +714,7 @@ var getConnection = function(callback) {
 var dbPatternProto = {
 	// generic constructor
 
-	init: function(userFuncs, userEndFunc, config) {
+	init: function(userFuncs, userEndFunc, config, userDeadlockFunc) {
 		// exploit basic, user functions so it can access db, data.
 		this.funcSeries = [];
 
@@ -732,6 +733,9 @@ var dbPatternProto = {
 
 		if (userEndFunc)
 			this.userEndFunc = this.applyFuncGen(userEndFunc, this);
+		
+		if (userDeadlockFunc)
+			this.userDeadlockRollbackFunc = this.applyFuncGen(userDeadlockFunc, this);
 
 		// configure
 		if (config) {
@@ -747,7 +751,6 @@ var dbPatternProto = {
 			// otherwise, releases db
 			if (config.db) {
 				this.db = config.db;
-				this.db.a = 111;
 				this.createDB = false;
 			} else
 				this.createDB = true;
@@ -761,6 +764,7 @@ var dbPatternProto = {
 			this.async = async.waterfall;
 
 		this.data = {};
+		this.events = [];
 
 		return this;
 	},
@@ -771,11 +775,13 @@ var dbPatternProto = {
 	basicFuncs: null,
 	userFuncs: null,
 	userEndFunc: null,
+	userDeadlockRollbackFunc: null,
 	basicEndFunc: null,       /* Function called when trx ends */
 	async: undefined,
 	db: null,                 /* User function can access db by this.db */
 	createDB: false,         /* Release db at the end or not */
 	data: null,              /* Can use to share data across user series functions */
+	events: null,            /* User events to emit */
 	run: function() {
 		this.async(this.funcSeries, this.basicEndFunc);
 
@@ -788,6 +794,27 @@ var dbPatternProto = {
 	releaseDBFunc: function() {
 		if (this.createDB && this.db)
 			this.db.release();
+	},
+	pushEvent: function(user, eventName, data) {
+		if (data) {
+			data.status = 'success';
+		} else {
+			data = {status: 'success'};
+		}
+		
+		this.events.push(user.emitter.pushEvent(eventName, data));
+	},
+	fireEvents: function(event) {
+		for (var i in this.events) {
+			this.events[i].fireEvent();
+		}
+		this.events.length = 0;
+	},
+	cancelEvents: function(event) {
+		for (var i in this.events) {
+			this.events[i].cancelEvent();
+		}
+		this.events.length = 0;
 	}
 };
 
@@ -814,15 +841,18 @@ var atomicPatternGen = function() {
 
 		this.basicFuncs = [_getConnection, _gotConnection];
 
-		this.basicEndFunc = function(err, result, fields) {
+		this.basicEndFunc = function(err) {
 			var db = this.db;
+			var args = arguments;
 
 			this.releaseDBFunc();
 
 			if (err) {
+				this.cancelEvents();
 				this.callUserEndFunc(err);
 			} else {
-				this.callUserEndFunc(null, result, fields);
+				this.fireEvents();
+				this.callUserEndFunc.apply(this, args);
 			}
 		};
 	};
@@ -849,7 +879,7 @@ var trxPatternGen = function() {
 		var _gotConnection = function(result, callback) {
 			if (result)
 				this.db = result;
-
+			
 			this.db.beginTransaction(callback);
 		};
 
@@ -860,24 +890,43 @@ var trxPatternGen = function() {
 		this.basicFuncs = [this.basicFuncs[0],
 			_gotConnection, _startedTransaction];
 
-		this.basicEndFunc = function(err, result, fields) {
+		this.basicEndFunc = function(err) {
 			var db = this.db;
 			var createDB = this.createDB;
 			var pattern = this;
+			var args = arguments;
 
 			if (err) {
 				// rollback and callback with error
 				if (db)
 					db.rollback(function() {
-						if (pattern.isMysqlDeadlockError(err) && pattern.retryDeadlock()) {
+						var deadlockFail = true;
+						if (pattern.isMysqlDeadlockError(err) && (deadlockFail = pattern.retryDeadlock())) {
 							var delay = pattern.getNextRetrialDelay();
 							lib.debug("retry due to deadlock, " + pattern.deadlockRetrialNumber + "th retrial");
 							lib.debug("retry arfter " + delay + "millsec");
+						
+							// Run user deadlock rollback function
+							if (pattern.userDeadlockRollbackFunc) {
+								pattern.userDeadlockRollbackFunc();
+							}
+							
+							// Reset pattern data
+							pattern.data = {db: db};
+							pattern.createDB = false;
+							
+							// Cancel events
+							pattern.cancelEvents();
+							
 							// If err is due to deadlock, 
 							// we start transaction again after some random delay.
-							setTimeout(() => {pattern.run.apply(pattern, arguments)}, delay);
+							setTimeout(() => {pattern.run()}, delay);
 						} else {
+							if (!deadlockFail) {
+								lib.debug('deadlock fail');
+							}
 							pattern.releaseDBFunc();
+							pattern.cancelEvents();
 							pattern.callUserEndFunc(err);
 						}
 					});
@@ -887,24 +936,28 @@ var trxPatternGen = function() {
 					db.commit(function(err) {
 						if (err) {
 							db.rollback(function() {
+								pattern.cancelEvents();
 								pattern.releaseDBFunc();
 								pattern.callUserEndFunc(err);
 							});
 						} else {
 							pattern.releaseDBFunc();
-							pattern.callUserEndFunc(null, result, fields);
+							pattern.fireEvents();
+							pattern.callUserEndFunc.apply(pattern, args);
 						}
 					});
-				} else
-					pattern.callUserEndFunc(null, result, fields);
+				} else {
+					pattern.fireEvents();
+					pattern.callUserEndFunc.apply(pattern, args);
+				}
 			}
 		};
 		
 		this.isMysqlDeadlockError = (err) => err && err.code==='ER_LOCK_DEADLOCK' && err.errno===1213 && err.sqlState==='40001';
 		
 		this.deadlockRetrialNumber = 0;
-		this.deadlockMaxRetrial = 8;
-		this.deadlockRetrialDelay = 500;
+		this.deadlockMaxRetrial = 4;
+		this.deadlockRetrialDelay = 250;
 		this.retryDeadlock = () => {
 			if (this.deadlockRetrialNumber++ >= this.deadlockMaxRetrial) {
 				return false;
