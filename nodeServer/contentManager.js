@@ -11,6 +11,9 @@ var downloadJobs = rbTree.createRBTree();
 var uploadId = 1;
 var downloadId = 1;
 
+var uploadJobTimeout = 5000;
+var downloadJobTimeout = 5000;
+
 // Content type configuration
 var contentType = {
 	image: {
@@ -38,20 +41,20 @@ var init = function(user) {
 			return;
 		}
 		
-		var id = parseInt(data.id);
+		var uploadId = parseInt(data.uploadId);
 		var size = parseInt(data.size);
 		var ext = data.extension;
 		
-		lib.debug('start upload id ' + id + ' size, ' + size);
+		lib.debug('start upload id ' + uploadId + ' size, ' + size);
 		
 		// id and size should be integer
-		if (id !== id || size !== size || typeof(ext) != 'string') {
+		if (uploadId !== uploadId || size !== size || typeof(ext) != 'string') {
 			return user.emitter.pushEvent('startUpload', 
 					{status:'fail', errorMsg: 'invalid input'}).fireEvent();
 		}
 		
 		// Get job
-		var job = uploadJobs.get(id);
+		var job = uploadJobs.get(uploadId);
 		
 		// Job should exist
 		if (!job) {
@@ -67,70 +70,88 @@ var init = function(user) {
 		
 		// Set content size
 		job.size = size;
+		job.left = size;
 		
-		// Create upload file
+		// Create upload file name
 		var contentName = crypto.randomBytes(8).toString('hex');
+		
+		// Get type of content file
 		var typeStr = job.contentType;
-		lib.debug('upload type str ' + typeStr);
 		var type = contentType[typeStr];
-		lib.debug('upload type ' + type);
-		if (type) {
-			var dir = type.dir;
-			var exts = type.exts;
-			
-			// Check if extension is valid
-			if (exts.indexOf(ext) < 0) {
-				return user.emitter.pushEvent('startUpload', 
-						{status:'fail', errorMsg: 'invalid extension'}).fireEvent();
+		
+		if (!type) {
+			return user.emitter.pushEvent('startUpload', 
+					{status:'fail', errorMsg: 'server error'}).fireEvent();
+		}
+		
+		var dir = type.dir;
+		var exts = type.exts;
+		
+		// Check if extension is valid
+		if (exts.indexOf(ext) < 0) {
+			return user.emitter.pushEvent('startUpload', 
+					{status:'fail', errorMsg: 'invalid extension'}).fireEvent();
+		}
+		
+		// Add extension to content name
+		contentName += '.' + ext;
+		
+		async.waterfall([
+			function(callback) {
+				// Make sure directory exists
+				fs.stat(dir, function(err, stats) {
+					if (err) {
+						// Create directory
+						fs.mkdir(dir, function(err) {
+							callback(err);
+						});
+					} else {
+						if (stats.isDirectory()) {
+							// Directory exists
+							callback(null);
+						} else {
+							callback(new Error('Failed to initialize'));
+						}
+					}
+				});
+			},
+			function(callback) {
+				// Set file path
+				job.path = dir + '/' + contentName;
+				
+				// Create file
+				fs.open(job.path, 'wx', callback);
+			},
+			function(fd, callback) {
+				// Set file descriptor
+				job.file = fd;
+				job.contentName = contentName;
+				
+				lib.debug('upload file descriptor ' + fd);
+				
+				callback(null);
+			}
+		],
+		function(err) {
+			// Clear timer
+			if (job.timer) {
+				clearTimeout(job.timer);
 			}
 			
-			// Add extension to content name
-			contentName += '.' + ext;
+			// Set timer again
+			job.timer = setTimeout(function() {
+				job.finish(new Error('Timeout'));
+			}, uploadJobTimeout);
 			
-			async.waterfall([
-				function(callback) {
-					// Make sure directory exists
-					fs.stat(dir, function(err, stats) {
-						if (err) {
-							// Create directory
-							fs.mkdir(dir, function(err) {
-								callback(err);
-							});
-						} else {
-							if (stats.isDirectory()) {
-								// Directory exists
-								callback(null);
-							} else {
-								callback(new Error('Failed to initialize'));
-							}
-						}
-					});
-				},
-				function(callback) {
-					// Create file
-					fs.open(dir + '/' + contentName, 'wx', callback);
-				},
-				function(fd, callback) {
-					// Set file descriptor
-					job.file = fd;
-					job.contentName = contentName;
-					
-					lib.debug('upload file descriptor ' + fd);
-					
-					callback(null);
-				}
-			],
-			function(err) {
-				if (err) {
-					user.emitter.pushEvent('startUpload', 
-							{status: 'fail', errorMsg: 'server erorr'}).fireEvent();
-				} else {
-					// From now on user can upload data;
-					user.emitter.pushEvent('startUpload', 
-							{status:'success', uploadId: id}).fireEvent();
-				}
-			});
-		}
+			if (err) {
+				user.emitter.pushEvent('startUpload', 
+						{status: 'fail', errorMsg: 'server erorr', uploadId: uploadId}).fireEvent();
+			} else {
+				// From now on user can upload data;
+				user.emitter.pushEvent('startUpload', 
+						{status:'success', uploadId: uploadId, contentName: job.contentName}).fireEvent();
+			}
+		});
 	});
 	
 	user.on('upload', function(data) {
@@ -138,26 +159,26 @@ var init = function(user) {
 			return;
 		
 		// Get user input
-		var id = parseInt(data.id);
+		var uploadId = parseInt(data.uploadId);
 		var buf = data.buf;
 		
-		lib.debug('upload id ' + id + ' size ' + buf.length);
+		lib.debug('upload id ' + uploadId + ' size ' + buf.length);
 		
 		// Check data validity
-		if (id !== id || !buf) {
+		if (uploadId !== uploadId || !buf) {
 			return user.emitter.pushEvent('upload', 
 					{status:'fail', errorMsg: 'invalid input'}).fireEvent();
 		}
 		
 		// Get job
-		var job = uploadJobs.get(id);
+		var job = uploadJobs.get(uploadId);
 		
 		// Job should exist
 		if (!job) {
 			return;
 		}
 		
-		// The user shoud match
+		// The user should match
 		if (job.user != user) {
 			return user.emitter.pushEvent('upload', 
 					{status:'fail', errorMsg: 'authorization failed'}).fireEvent();
@@ -170,35 +191,45 @@ var init = function(user) {
 					{status:'fail', errorMsg: 'emit startUpload event first'}).fireEvent();
 		}
 		
+		// Compute valid size of upload
+		var bufSize = buf.length;
+		var leftSize = job.left;
+		var validSize = leftSize < bufSize ? leftSize : bufSize;
+		
+		// Cur buffer if buffer size is too big
+		if (leftSize < bufSize) {
+			buf = buf.slice(0, validSize);
+		}
+		
+		// Subtract left size
+		job.left -= validSize;
+		
+		// Write to file
 		fs.writeFile(file, buf, function(writeErr) {
+			// Clear timer
+			if (job.timer) {
+				clearTimeout(job.timer);
+			}
+			
+			// Set timer again
+			job.timer = setTimeout(function() {
+				job.finish(new Error('Timeout'));
+			}, uploadJobTimeout);
+			
 			if (writeErr) {
 				lib.debug(writeErr);
 				user.emitter.pushEvent('upload', 
-						{status:'fail', errorMsg: 'failed to write'}).fireEvent();
+						{status:'fail', errorMsg: 'failed to write', uploadId: uploadId}).fireEvent();
+			} else {
+				user.emitter.pushEvent('upload', 
+						{status:'success', uploadId: uploadId, ack: job.size - job.left}).fireEvent();
 			}
 			
-			fs.close(file, function(err) {
-				if (err) {
-					lib.debug(err);
-				} else if (!writeErr) {
-					// Done, remove the job
-					uploadJobs.remove(job.id);
-					
-					// Remove from user job list
-					user.uploadJobs = user.uploadJobs.filter(function(value, index, arr) {
-						return value != job;
-					});
-					
-					user.emitter.pushEvent('upload', {status:'success'}).fireEvent();
-				}
-				
-				// Call callback function
-				if (job.callback) {
-					setTimeout(function() {
-						job.callback(writeErr || err, job.contentName);
-					}, 0);
-				}
-			});
+			// Check if upload is done or error
+			if (job.left == 0 || writeErr) {
+				// Finish upload job
+				job.finish(writeErr);
+			}
 		})
 	});
 	
@@ -206,7 +237,7 @@ var init = function(user) {
 		if (!session.validateRequest('startDownload', user, true, data))
 			return;
 	
-		var contentName = data.name;
+		var contentName = data.contentName;
 		var typeStr = data.type;
 		var sendId = parseInt(data.sendId);
 		
@@ -216,14 +247,16 @@ var init = function(user) {
 					{status:'fail', errorMsg: 'invalid input'}).fireEvent();
 		}
 		
-		var fs, path;
+		lib.debug('start downlaod ' +contentName + ' sendId ' + sendId + ' type ' + typeStr);
+		
+		var path;
 		var type = contentType[typeStr];
 		
 		// Content extension must match
 		var split = contentName.split('.');
 		
 		if (split.length > 1) {
-			if (split[1].indexOf(type.exts) < 0) {
+			if (type.exts.indexOf(split[split.length - 1]) < 0) {
 				return user.emitter.pushEvent('startDownload', 
 						{status:'fail', errorMsg: 'invalid extension'}).fireEvent();
 			}
@@ -239,7 +272,7 @@ var init = function(user) {
 		var job, file, size;
 		
 		// Open file
-		Async.waterfall([
+		async.waterfall([
 			function(callback) {
 				// Open file
 				fs.open(path, 'r', callback);
@@ -255,6 +288,8 @@ var init = function(user) {
 					return callback(new Error('content is not a file'));
 				}
 				
+				lib.debug('content exsits');
+				
 				// Get file size
 				size = stat.size;
 				
@@ -262,7 +297,8 @@ var init = function(user) {
 				var id = downloadId++;
 			
 				// Create download job
-				job = new downloadJob(user, id, typeStr, file);
+				job = new downloadJob(user, id, contentName, typeStr, file);
+				job.size = size;
 				
 				// Add to global upload jobs
 				if (downloadJobs.add(id, job)) {
@@ -280,11 +316,11 @@ var init = function(user) {
 			if (err) {
 				lib.debug(err);
 				user.emitter.pushEvent('startDownload', 
-						{status:'fail', errorMsg: 'content error'}).fireEvent();
+						{status:'fail', errorMsg: 'content error', sendId: sendId}).fireEvent();
 				
 				// Close file if opened
-				if (job && job.file) {
-					file.close(function(err) {
+				if (file) {
+					fs.close(file, function(err) {
 						lib.debug(err);
 					});
 				}
@@ -299,30 +335,25 @@ var init = function(user) {
 			} else {
 				// Emit the user job id and size
 				user.emitter.pushEvent('startDownload', 
-						{status:'success', downloadId: job.id, size: job.size}).fireEvent();
+						{status:'success', downloadId: job.id, sendId: sendId, size: job.size}).fireEvent();
+				
+				// Create timer
+				job.timer = setTimeout(function() {
+					job.finish(new Error('Timeout'));
+				}, downloadJobTimeout);
 				
 				// Send file data
 				fs.readFile(job.file, function(err, buf) {
 					if (err) {
 						user.emitter.pushEvent('download', 
-								{status:'fail', errorMsg: 'file error'}).fireEvent();
+								{status:'fail', errorMsg: 'file error', downloadId: job.id}).fireEvent();
 					} else {
 						user.emitter.pushEvent('download', {status:'success', 
 							downloadId: job.id, size: job.size, buffer: buf}).fireEvent();
 					}
 					
-					// Done, remove file
-					fs.close(job.file, function(err) {
-						if (err) {
-							lib.debug(err);
-						}
-						
-						// Remove job from list
-						downloadJobs.remove(job.id);
-						user.downloadJobs = user.downloadJobs.filter(function(value, index, arr) {
-							return value != job;
-						});
-					});
+					// Finish download job
+					job.finish(err);
 				});
 			}
 		});
@@ -336,7 +367,7 @@ var init = function(user) {
 		var id = parseInt(data.id);
 		var size = parseInt(data.size);
 		
-		// Validata user input
+		// Validate user input
 		if (id !== id || size !== size) {
 			return user.emitter.pushEvent('downloadAck', 
 					{status:'fail', errorMsg: 'invalid input'}).fireEvent();
@@ -375,22 +406,25 @@ var init = function(user) {
 var uploadJobProto = {
 	user: null,			// user
 	id: null,			// Job id
-	contentName: null,		// File name
+	contentName: null,	// File name
 	contentType: null,	// Content type
+	path: null,			// File path
 	size: null,			// Total size of content
-	doneSize: 0,		// Transfered size of content
+	left: null,			// Size of content not delivered yet
 	file: null,			// File
 	callback: null,		// Callback function
+	timer: null 		// Timeout callback
 };
 
 var downloadJobProto = {
 	user: null,			// user
 	id: null,			// Job id
-	contentName: null,		// File name
+	contentName: null,	// File name
 	contentType: null,	// Content type
 	size: null,			// Total size of content
 	doneSize: 0,		// Transfered size of content
 	file: null,			// File
+	timer: null 		// Timeout callback
 };
 
 var uploadJob = function(user, id, type, callback) {
@@ -398,12 +432,91 @@ var uploadJob = function(user, id, type, callback) {
 	this.id = id;
 	this.contentType = type;
 	this.callback = callback;
+	
+	this.finish = function(givenError) {
+		var job = this;
+		
+		lib.debug('Finish content ' + job.contentName + ' upload');
+		
+		// Done, remove the job
+		uploadJobs.remove(job.id);
+		
+		// Remove from user job list
+		if (job.user) {
+			job.user.uploadJobs = job.user.uploadJobs.filter(function(value, index, arr) {
+				return value != job;
+			});
+		}
+		
+		// Call callback function
+		if (job.callback) {
+			setTimeout(function() {
+				job.callback(givenError, job.contentName);
+			}, 0);
+		}
+		
+		// Cancel timer
+		if (job.timer) {
+			clearTimeout(job.timer);
+		}
+		
+		if (job.file) {
+			// Close file
+			fs.close(job.file, function(err) {
+				if (err) {
+					lib.debug(err);
+				}
+
+				// If error occurred, remove the file
+				if (givenError) {
+					fs.unlink(job.path, function(err) {
+						if (err) {
+							lib.debug(err);
+						} 
+						
+						lib.debug('File ' + job.path + ' was deleted');
+					});
+				}
+			});
+		}
+	}
 };
 
-var downloadJob = function(user, id, type, file, callback) {
+var downloadJob = function(user, id, contentName, type, file, callback) {
 	this.user = user;
 	this.id = id;
+	this.contentName = contentName;
+	this.contentType = type;
+	this.file = file;
 	
+	this.finish = function(givenError) {
+		var job = this;
+		
+		lib.debug('Finish downlaod job ' + job.contentName);
+		
+		// Remove job from list
+		downloadJobs.remove(job.id);
+		if (job.user) {
+			job.user.downloadJobs = job.user.downloadJobs.filter(function(value, index, arr) {
+				return value != job;
+			});
+		}
+		
+		// Cancel timer
+		if (job.timer) {
+			clearTimeout(job.timer);
+		}
+		
+		if (job.file) {
+			// Close file
+			fs.close(job.file, function(err) {
+				if (err) {
+					lib.debug(err);
+				}
+				lib.debug('Closed file ' + job.contentName);
+			});
+		}
+	}
 };
 
 uploadJob.prototype = uploadJob;
@@ -415,6 +528,11 @@ var enrollUploadJob = function(user, type, jobCallback, callback) {
 	
 	// Create upload job
 	var job = new uploadJob(user, id, type, jobCallback);
+	
+	// Create timer
+	job.timer = setTimeout(function() {
+		job.finish(new Error('Timeout'));
+	}, uploadJobTimeout);
 	
 	// Add upload job
 	if (uploadJobs.add(job.id, job)) {
