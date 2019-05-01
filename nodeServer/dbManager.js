@@ -337,7 +337,9 @@ var queries = {
 			"WHERE ((accountId = ? and accountId2 = ?) or (accountId2 = ? and accountId = ?)) and " +
 			"accepted = 0 ",
 
-	updateLastSeen: "UPDATE Accounts set lastSeen = NOW() where id = ? ",
+	updateLastSeen: "UPDATE Accounts SET lastSeen = NOW() WHERE id = ? ",
+	
+	updatePicture: "UPDATE Accounts SET picture = ? WHERE id = ? ",
 	
 	updateGroupName: "UPDATE Groups SET name = ? WHERE id = ? ",
 
@@ -642,6 +644,10 @@ var dbPrototype = {
 	updateLastSeen: function(data, callback) {
 		this.conn.query(queries.updateLastSeen,
 				[data.userId], callback);
+	},
+	updatePicture: function(data, callback) {
+		this.conn.query(queries.updatePicture,
+				[data.picture, data.userId], callback);
 	},
 	updateGroupName: function(data, callback) {
 		this.conn.query(queries.updateGroupName,

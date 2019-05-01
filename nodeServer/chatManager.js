@@ -606,6 +606,184 @@ var init = function(user) {
 			}
 		});
 	});
+	
+	user.on('sendImageMessage', function(data) {
+		if (!session.validateRequest('sendImageMessage', user, true, data))
+			return;
+		
+		// Get user inputs
+		var groupId = parseInt(data.groupId);
+		var imageSendId = parseInt(data.imageSendId);
+		var messageSendId = parseInt(data.messageSendId);
+		var importance = data.importance || 0;
+		lib.debug('send image message ' + groupId +  ', image send ' + imageSendId + ', message send ' + messageSendId);
+		// Check validity of inputs
+		if (groupId !== groupId || imageSendId !== imageSendId || messageSendId !== messageSendId) {
+			return;
+		}
+		
+		var uploadId;
+		
+		dbManager.trxPattern([
+			function(callback) {
+				// Check if the user is member of the group
+				this.db.getGroupMemberByUser(
+						{groupId: groupId, userId: user.userId, lock: true}, callback);
+			},
+			function(result, fields, callback) {
+				if (result.affectedRows == 0) {
+					return callback(new Error('You are not a member of group'));
+				}
+				
+				callback(null);
+			}
+		], function(err) {
+			if (err) {
+				return user.emit('sendImageMessage', 
+						{status: 'fail', errorMsg: 'you are not a member', sendId: messageSendId});
+			}
+			
+			// Enroll upload job
+			contentManager.enrollUploadJob(user, contentManager.types.image,
+			function(err, contentName) {
+				if (err) {
+					user.emitter.pushEvent('sendImageMessage', 
+							{status: 'fail', errorMsg: 'failed to upload', uploadId: uploadId}).fireEvent();
+				} else {
+					var content = contentName;
+				
+					lib.debug('content name ' + contentName);
+					if (groupId !== groupId)
+						return;
+
+					dbManager.trxPattern([
+						function(callback) {
+							// get group member count
+							addMessage({sendId: messageSendId, groupId: groupId, user: user, 
+								messageType: messageType.image, content: content, 
+								importance: importance, location: null, db: this.db}, 
+								callback);
+						}
+					],
+					function(err, message) {
+						if (err) {
+							lib.debug('failed to save message\r\n' + err);
+						} else {
+							lib.debug('add image message');
+							// Send message
+							setTimeout(function() {
+							sendMessage({user: user, groupId: groupId, messageId: message.messageId, 
+								sendId: messageSendId, db: this.db}, function(err) {
+									lib.debug(err);
+								});
+							}, 0);
+						}
+					});
+				}
+			},
+			function(err, id) {
+				if (err) {
+					user.emitter.pushEvent('sendImageMessage', 
+							{status: 'fail', errorMsg: 'failed to get ready', sendId: imageSendId}).fireEvent();
+				} else {
+					uploadId = id;
+					
+					lib.debug('upload image for message ' + imageSendId + ', upload Id ' + uploadId);
+					user.emitter.pushEvent('sendImageMessage', 
+							{status: 'success', uploadId: uploadId, sendId: imageSendId}).fireEvent();
+				}
+			});
+		});
+	});
+	
+	user.on('sendFileShareMessage', function(data) {
+		if (!session.validateRequest('sendFileShareMessage', user, true, data))
+			return;
+		
+		// Get user inputs
+		var groupId = parseInt(data.groupId);
+		var fileSendId = parseInt(data.fileSendId);
+		var messageSendId = parseInt(data.messageSendId);
+		var importance = data.importance || 0;
+		lib.debug('send file share message ' + groupId +  ', file send ' + fileSendId + ', message send ' + messageSendId);
+		// Check validity of inputs
+		if (groupId !== groupId || fileSendId !== fileSendId || messageSendId !== messageSendId) {
+			return;
+		}
+		
+		var uploadId;
+		
+		dbManager.trxPattern([
+			function(callback) {
+				// Check if the user is member of the group
+				this.db.getGroupMemberByUser(
+						{groupId: groupId, userId: user.userId, lock: true}, callback);
+			},
+			function(result, fields, callback) {
+				if (result.affectedRows == 0) {
+					return callback(new Error('You are not a member of group'));
+				}
+				
+				callback(null);
+			}
+		], function(err) {
+			if (err) {
+				return user.emit('sendFileShareMessage', 
+						{status: 'fail', errorMsg: 'you are not a member', sendId: messageSendId});
+			}
+			
+			// Enroll upload job
+			contentManager.enrollUploadJob(user, contentManager.types.binary,
+			function(err, contentName) {
+				if (err) {
+					user.emitter.pushEvent('sendFileShareMessage', 
+							{status: 'fail', errorMsg: 'failed to upload', uploadId: uploadId}).fireEvent();
+				} else {
+					var content = contentName;
+				
+					lib.debug('content name ' + contentName);
+					if (groupId !== groupId)
+						return;
+
+					dbManager.trxPattern([
+						function(callback) {
+							// get group member count
+							addMessage({sendId: messageSendId, groupId: groupId, user: user, 
+								messageType: messageType.fileShare, content: content, 
+								importance: importance, location: null, db: this.db}, 
+								callback);
+						}
+					],
+					function(err, message) {
+						if (err) {
+							lib.debug('failed to save message\r\n' + err);
+						} else {
+							lib.debug('add file share message');
+							// Send message
+							setTimeout(function() {
+							sendMessage({user: user, groupId: groupId, messageId: message.messageId, 
+								sendId: messageSendId, db: this.db}, function(err) {
+									lib.debug(err);
+								});
+							}, 0);
+						}
+					});
+				}
+			},
+			function(err, id) {
+				if (err) {
+					user.emitter.pushEvent('sendFileShareMessage', 
+							{status: 'fail', errorMsg: 'failed to get ready', sendId: fileSendId}).fireEvent();
+				} else {
+					uploadId = id;
+					
+					lib.debug('upload file for message ' + fileSendId + ', upload Id ' + uploadId);
+					user.emitter.pushEvent('sendFileShareMessage', 
+							{status: 'success', uploadId: uploadId, sendId: fileSendId}).fireEvent();
+				}
+			});
+		});
+	});
 };
 
 // init user when logined
@@ -670,7 +848,8 @@ var addMessage = dbManager.composablePattern(function(pattern, callback) {
 	var location = this.data.location || null;
 	var date = new Date();
 	var joinMemberUserIds = this.data.joinMemberUserIds || null;
-	var mustBeMember = this.data.mustBeMember != null ? this.data.mustBeMember: true;
+	var mustBeMember = (this.data.mustBeMember != null && this.data.mustBeMember != undefined) 
+						? this.data.mustBeMember: true;
 	
 	if (groupId !== groupId)
 		return callback(new Error("failed to parse groupId"));
@@ -1126,5 +1305,6 @@ module.exports = {init: init,
 var session = require('./session');
 var group = require('./group');
 var chat = require('./chat');
+var contentManager = require('./contentManager');
 var lib = require('./lib');
 var async = require('async');

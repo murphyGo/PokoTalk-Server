@@ -1,32 +1,34 @@
 /** Content manager is managing all media contents other than text, such as images, files.
  *  Users can upload and download contents interacting with content manager events */
-var rbTree = require('./RBTree');
-var dbManager = require('./dbManager');
-var fs = require('fs');
-var crypto = require('crypto');
+const rbTree = require('./RBTree');
+const dbManager = require('./dbManager');
+const fs = require('fs');
+const crypto = require('crypto');
 
-var uploadJobs = rbTree.createRBTree();
-var downloadJobs = rbTree.createRBTree();
+const uploadJobs = rbTree.createRBTree();
+const downloadJobs = rbTree.createRBTree();
 
 var uploadId = 1;
 var downloadId = 1;
 
-var uploadJobTimeout = 5000;
-var downloadJobTimeout = 5000;
+const uploadJobTimeout = 5000;
+const downloadJobTimeout = 5000;
 
 // Content type configuration
-var contentType = {
+const contentType = {
 	image: {
 		exts: ['jpeg', 'jpg', 'png'],
 		dir: './imageContents',
+		maximumSize: 1024 * 1024
 	},
 	binary: {
-		exts: ['', 'zip'],
-		dir: './binaryContents'
+		exts: ['*',],
+		dir: './binaryContents',
+		maximumSize: 1024 * 1024 * 100
 	}
 };
 
-var types = {
+const types = {
 	image: 'image',
 	binary: 'binary'
 }
@@ -62,7 +64,7 @@ var init = function(user) {
 					{status:'fail', errorMsg: 'invalid id'}).fireEvent();
 		}
 		
-		// The user shoud match
+		// The user should match
 		if (job.user != user) {
 			return user.emitter.pushEvent('startUpload', 
 					{status:'fail', errorMsg: 'authorization failed'}).fireEvent();
@@ -88,7 +90,7 @@ var init = function(user) {
 		var exts = type.exts;
 		
 		// Check if extension is valid
-		if (exts.indexOf(ext) < 0) {
+		if (exts.indexOf('*') < 0 && exts.indexOf(ext) < 0) {
 			return user.emitter.pushEvent('startUpload', 
 					{status:'fail', errorMsg: 'invalid extension'}).fireEvent();
 		}
@@ -144,6 +146,7 @@ var init = function(user) {
 			}, uploadJobTimeout);
 			
 			if (err) {
+				lib.debug(err);
 				user.emitter.pushEvent('startUpload', 
 						{status: 'fail', errorMsg: 'server erorr', uploadId: uploadId}).fireEvent();
 			} else {
@@ -196,7 +199,7 @@ var init = function(user) {
 		var leftSize = job.left;
 		var validSize = leftSize < bufSize ? leftSize : bufSize;
 		
-		// Cur buffer if buffer size is too big
+		// Cut buffer if buffer size is too big
 		if (leftSize < bufSize) {
 			buf = buf.slice(0, validSize);
 		}
@@ -216,6 +219,7 @@ var init = function(user) {
 				job.finish(new Error('Timeout'));
 			}, uploadJobTimeout);
 			
+			// Emit message
 			if (writeErr) {
 				lib.debug(writeErr);
 				user.emitter.pushEvent('upload', 
@@ -225,10 +229,29 @@ var init = function(user) {
 						{status:'success', uploadId: uploadId, ack: job.size - job.left}).fireEvent();
 			}
 			
-			// Check if upload is done or error
-			if (job.left == 0 || writeErr) {
+			// Check if i is an error
+			if (writeErr) {
 				// Finish upload job
 				job.finish(writeErr);
+			}
+			// Check if job is done
+			else if (job.left == 0) {
+				if (job.contentType == types.image) {
+					// Create thumbnail image
+					image.createThumbnailImage(job.contentName, function(err) {
+						if (err) {
+							lib.debug(err);
+						} else {
+							lib.debug('created thumbnail image');
+						}
+						
+						// Finish upload job
+						job.finish(null);
+					});
+				} else {
+					// Finish upload job
+					job.finish(null);
+				}
 			}
 		})
 	});
@@ -299,6 +322,7 @@ var init = function(user) {
 				// Create download job
 				job = new downloadJob(user, id, contentName, typeStr, file);
 				job.size = size;
+				job.sendId = sendId;
 				
 				// Add to global upload jobs
 				if (downloadJobs.add(id, job)) {
@@ -346,10 +370,11 @@ var init = function(user) {
 				fs.readFile(job.file, function(err, buf) {
 					if (err) {
 						user.emitter.pushEvent('download', 
-								{status:'fail', errorMsg: 'file error', downloadId: job.id}).fireEvent();
+								{status:'fail', errorMsg: 'file error', 
+							downloadId: job.id, sendId: job.sendId}).fireEvent();
 					} else {
 						user.emitter.pushEvent('download', {status:'success', 
-							downloadId: job.id, size: job.size, buffer: buf}).fireEvent();
+							downloadId: job.id, sendId: job.sendId, size: job.size, buffer: buf}).fireEvent();
 					}
 					
 					// Finish download job
@@ -419,6 +444,7 @@ var uploadJobProto = {
 var downloadJobProto = {
 	user: null,			// user
 	id: null,			// Job id
+	sendId: null,		// Send id
 	contentName: null,	// File name
 	contentType: null,	// Content type
 	size: null,			// Total size of content
@@ -550,7 +576,7 @@ var enrollUploadJob = function(user, type, jobCallback, callback) {
 
 var clearAllJobOfUser = function(user) {
 	var userUploadJobs = user.uploadJobs;
-	var userDownploadJobs = user.downloadJobs;
+	var userDownloadJobs = user.downloadJobs;
 	
 	if (userUploadJobs) {
 		for (var i in userUploadJobs) {
@@ -564,9 +590,9 @@ var clearAllJobOfUser = function(user) {
 		}
 	}
 	
-	if (userDownploadJobs) {
-		for (var i in userDownploadJobs) {
-			var job = userDownploadJobs[i];
+	if (userDownloadJobs) {
+		for (var i in userDownloadJobs) {
+			var job = userDownloadJobs[i];
 			downloadJobs.remove(job.id);
 			if (job.file) {
 				fs.close(job.file, function(err) {
@@ -581,6 +607,7 @@ var clearAllJobOfUser = function(user) {
 };
 
 module.exports = {init: init,
+	contentType: contentType,
 	types: types,
 	enrollUploadJob: enrollUploadJob,
 	clearAllJobOfUser: clearAllJobOfUser};
@@ -588,3 +615,4 @@ module.exports = {init: init,
 var session = require('./session');
 var lib = require('./lib');
 var async = require('async');
+const image = require('./imageProcessor');

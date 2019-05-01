@@ -295,24 +295,59 @@ function init(user) {
 			return;
 		}
 		
+		var uploadId;
+		
 		// Enroll update job
 		contentManager.enrollUploadJob(user, contentManager.types.image,
 		function(err, contentName) {
 			if (err) {
 				lib.debug(err);
-			} else {
 				user.emitter.pushEvent('updateProfileImage', 
-						{status: 'success', contentName: contentName}).fireEvent();
+						{status: 'fail', errorMsg: 'failed to upload', uploadId: uploadId}).fireEvent();
+			} else {
+				dbManager.trxPattern([
+					function(callback) {
+						// Update user profile image
+						this.db.updatePicture({userId: user.userId, picture: contentName}, callback);
+					},
+					function(result, fields, callback) {
+						if (result.affectedRows == 0) {
+							lib.debug('update fail');
+							return callback(new Error('Failed to update picture'));
+						}
+						
+						lib.debug('update success ' + result.affectedRows);
+						
+						// Get user sessions
+						var sessions = getUserSessions(user);
+						
+						// Notify to sessions of the user
+						for (var i in sessions) {
+							this.pushEvent(sessions[i], 'updateProfileImage', {contentName: contentName});
+						}
+						
+						callback(null);
+					}
+				],
+				function(err) {
+					if (err) {
+						user.emitter.pushEvent('updateProfileImage', 
+								{status: 'fail', errorMsg: 'server error', 
+									contentName: contentName}).fireEvent();
+					}
+				});
 			}
 		},
 		function(err, id) {
 			if (err) {
 				user.emitter.pushEvent('updateProfileImage', 
-						{status: 'fail', errorMsg: 'failed to get ready'}).fireEvent();
+						{status: 'fail', errorMsg: 'failed to get ready', sendId: sendId}).fireEvent();
 			} else {
+				uploadId = id;
+				
 				lib.debug('update profile start ' + sendId + ', upload Id ' + id);
 				user.emitter.pushEvent('updateProfileImage', 
-						{status: 'success', uploadId: id, sendId: sendId}).fireEvent();
+						{status: 'success', uploadId: uploadId, sendId: sendId}).fireEvent();
 			}
 		});
 	});
