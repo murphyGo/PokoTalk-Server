@@ -16,7 +16,6 @@ var createThumbnailImage = function(imageName, callback) {
 	// Get extension of file
 	var ext = splits[splits.length - 1];
 	
-	lib.debug(contentManager);
 	// Get directory path of images
 	var dir = contentManager.contentType.image.dir;
 	
@@ -26,9 +25,6 @@ var createThumbnailImage = function(imageName, callback) {
 	
 	// Original file path
 	var oFilePath = dir + '/' + imageName;
-	
-	// Create file stream
-	//const readStream = fs.createReadStream(path);
 	
 	// Create transform
 	let transform = sharp(oFilePath);

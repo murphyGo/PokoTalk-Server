@@ -14,6 +14,9 @@ var downloadId = 1;
 const uploadJobTimeout = 5000;
 const downloadJobTimeout = 5000;
 
+const downloadChunkSize = 2 * 1024 * 1024;
+const downloadWindowSize = 2 * 1024 * 1024;
+
 // Content type configuration
 const contentType = {
 	image: {
@@ -149,6 +152,9 @@ var init = function(user) {
 				lib.debug(err);
 				user.emitter.pushEvent('startUpload', 
 						{status: 'fail', errorMsg: 'server erorr', uploadId: uploadId}).fireEvent();
+				
+				// Finish job
+				job.finish(err);
 			} else {
 				// From now on user can upload data;
 				user.emitter.pushEvent('startUpload', 
@@ -165,8 +171,6 @@ var init = function(user) {
 		var uploadId = parseInt(data.uploadId);
 		var buf = data.buf;
 		
-		lib.debug('upload id ' + uploadId + ' size ' + buf.length);
-		
 		// Check data validity
 		if (uploadId !== uploadId || !buf) {
 			return user.emitter.pushEvent('upload', 
@@ -181,6 +185,12 @@ var init = function(user) {
 			return;
 		}
 		
+		// Check if the job is done
+		if (job.done) {
+			return user.emitter.pushEvent('upload', 
+					{status:'fail', errorMsg: 'upload closed'}).fireEvent();
+		}
+		
 		// The user should match
 		if (job.user != user) {
 			return user.emitter.pushEvent('upload', 
@@ -192,6 +202,11 @@ var init = function(user) {
 		if (!file) {
 			return user.emitter.pushEvent('upload', 
 					{status:'fail', errorMsg: 'emit startUpload event first'}).fireEvent();
+		}
+		
+		if (job.left <= 0) {
+			return user.emitter.pushEvent('upload', 
+					{status:'fail', errorMsg: 'too many bytes'}).fireEvent();
 		}
 		
 		// Compute valid size of upload
@@ -208,7 +223,7 @@ var init = function(user) {
 		job.left -= validSize;
 		
 		// Write to file
-		fs.writeFile(file, buf, function(writeErr) {
+		fs.write(file, buf, function(writeErr) {
 			// Clear timer
 			if (job.timer) {
 				clearTimeout(job.timer);
@@ -225,32 +240,44 @@ var init = function(user) {
 				user.emitter.pushEvent('upload', 
 						{status:'fail', errorMsg: 'failed to write', uploadId: uploadId}).fireEvent();
 			} else {
+				// Increment written size
+				job.written += validSize;
+				
 				user.emitter.pushEvent('upload', 
 						{status:'success', uploadId: uploadId, ack: job.size - job.left}).fireEvent();
 			}
 			
-			// Check if i is an error
-			if (writeErr) {
-				// Finish upload job
-				job.finish(writeErr);
-			}
-			// Check if job is done
-			else if (job.left == 0) {
-				if (job.contentType == types.image) {
-					// Create thumbnail image
-					image.createThumbnailImage(job.contentName, function(err) {
-						if (err) {
-							lib.debug(err);
-						} else {
-							lib.debug('created thumbnail image');
-						}
-						
+			// If the job is not done
+			if (!job.done) {
+				// Check if i is an error
+				if (writeErr) {
+					// Mark job done
+					job.markDone();
+					
+					// Finish upload job
+					job.finish(writeErr);
+				}
+				// Check if job is done
+				else if (job.written == job.size) {
+					// Mark job done
+					job.markDone();
+					
+					if (job.contentType == types.image) {
+						// Create thumbnail image
+						image.createThumbnailImage(job.contentName, function(err) {
+							if (err) {
+								lib.debug(err);
+							} else {
+								lib.debug('created thumbnail image');
+							}
+							
+							// Finish upload job
+							job.finish(null);
+						});
+					} else {
 						// Finish upload job
 						job.finish(null);
-					});
-				} else {
-					// Finish upload job
-					job.finish(null);
+					}
 				}
 			}
 		})
@@ -275,11 +302,19 @@ var init = function(user) {
 		var path;
 		var type = contentType[typeStr];
 		
+		if (!type) {
+			return user.emitter.pushEvent('startDownload', 
+					{status:'fail', errorMsg: 'invalid type'}).fireEvent();
+		}
+		
+		// Get extensions
+		var exts = type.exts;
+		
 		// Content extension must match
 		var split = contentName.split('.');
 		
 		if (split.length > 1) {
-			if (type.exts.indexOf(split[split.length - 1]) < 0) {
+			if (exts.indexOf('*') < 0 && exts.indexOf(split[split.length - 1]) < 0) {
 				return user.emitter.pushEvent('startDownload', 
 						{status:'fail', errorMsg: 'invalid extension'}).fireEvent();
 			}
@@ -366,20 +401,8 @@ var init = function(user) {
 					job.finish(new Error('Timeout'));
 				}, downloadJobTimeout);
 				
-				// Send file data
-				fs.readFile(job.file, function(err, buf) {
-					if (err) {
-						user.emitter.pushEvent('download', 
-								{status:'fail', errorMsg: 'file error', 
-							downloadId: job.id, sendId: job.sendId}).fireEvent();
-					} else {
-						user.emitter.pushEvent('download', {status:'success', 
-							downloadId: job.id, sendId: job.sendId, size: job.size, buffer: buf}).fireEvent();
-					}
-					
-					// Finish download job
-					job.finish(err);
-				});
+				// Start reading file
+				job.sendChunksIfPossible()
 			}
 		});
 	});
@@ -389,40 +412,51 @@ var init = function(user) {
 			return;
 		
 		// Parse user input
-		var id = parseInt(data.id);
-		var size = parseInt(data.size);
+		var downloadId = parseInt(data.downloadId);
+		var ack = parseInt(data.ack);
 		
 		// Validate user input
-		if (id !== id || size !== size) {
+		if (downloadId !== downloadId || ack !== ack) {
 			return user.emitter.pushEvent('downloadAck', 
 					{status:'fail', errorMsg: 'invalid input'}).fireEvent();
 		}
 		
 		// Get job
-		var job = downloadJobs.get(id);
+		var job = downloadJobs.get(downloadId);
 		
 		// Job must exist
 		if (!job) {
+			
 			return user.emitter.pushEvent('downloadAck', 
 					{status:'fail', errorMsg: 'no such job'}).fireEvent();
 		}
 		
-		// The user shoud match
+		// The user should match
 		if (job.user != user) {
 			return user.emitter.pushEvent('downloadAck', 
 					{status:'fail', errorMsg: 'authorization failed'}).fireEvent();
 		}
 		
 		// Update job size
-		job.doneSize += size;
+		job.doneSize = Math.max(job.doneSize, ack);
+		
+		// Clear timer
+		if (job.timer) {
+			clearTimeout(job.timer);
+		}
+		
+		// Create timer
+		job.timer = setTimeout(function() {
+			job.finish(new Error('Timeout'));
+		}, downloadJobTimeout);
 		
 		// Send more data if needed
-		if (job.doneSize >= jb.size) {
+		if (job.doneSize >= job.size) {
 			// Done, remove job
-		} else {
-			var left = job.size - job.donezSize;
-			
-			// Send more data
+			job.finish(null);
+		} else {	
+			// Send more data if possible
+			job.sendChunksIfPossible();
 		}
 	});
 };
@@ -431,26 +465,36 @@ var init = function(user) {
 var uploadJobProto = {
 	user: null,			// user
 	id: null,			// Job id
+	done: false, 	   	// Done
 	contentName: null,	// File name
 	contentType: null,	// Content type
 	path: null,			// File path
 	size: null,			// Total size of content
 	left: null,			// Size of content not delivered yet
+	written: 0,			// Size of content written to file
 	file: null,			// File
 	callback: null,		// Callback function
-	timer: null 		// Timeout callback
+	timer: null, 		// Timeout callback
+	markDone: function() {
+		this.done = true;
+	}
 };
 
 var downloadJobProto = {
 	user: null,			// user
 	id: null,			// Job id
+	done: false,		// Done
 	sendId: null,		// Send id
 	contentName: null,	// File name
 	contentType: null,	// Content type
 	size: null,			// Total size of content
-	doneSize: 0,		// Transfered size of content
+	sendSize: 0,		// Transferred size of content by server
+	doneSize: 0,		// Size of content acked by user
 	file: null,			// File
-	timer: null 		// Timeout callback
+	timer: null, 		// Timeout callback
+	markDone: function() {
+		this.done = true;
+	}
 };
 
 var uploadJob = function(user, id, type, callback) {
@@ -463,6 +507,13 @@ var uploadJob = function(user, id, type, callback) {
 		var job = this;
 		
 		lib.debug('Finish content ' + job.contentName + ' upload');
+		
+		// Mark job done
+		this.markDone();
+		
+		if (givenError){
+			lib.debug(givenError);
+		}
 		
 		// Done, remove the job
 		uploadJobs.remove(job.id);
@@ -484,7 +535,10 @@ var uploadJob = function(user, id, type, callback) {
 		// Cancel timer
 		if (job.timer) {
 			clearTimeout(job.timer);
+			job.timer = null;
 		}
+		
+		lib.debug('clear timer');
 		
 		if (job.file) {
 			// Close file
@@ -520,6 +574,9 @@ var downloadJob = function(user, id, contentName, type, file, callback) {
 		
 		lib.debug('Finish downlaod job ' + job.contentName);
 		
+		// Mark job done
+		this.markDone();
+		
 		// Remove job from list
 		downloadJobs.remove(job.id);
 		if (job.user) {
@@ -531,6 +588,7 @@ var downloadJob = function(user, id, contentName, type, file, callback) {
 		// Cancel timer
 		if (job.timer) {
 			clearTimeout(job.timer);
+			job.timer = null;
 		}
 		
 		if (job.file) {
@@ -543,10 +601,97 @@ var downloadJob = function(user, id, contentName, type, file, callback) {
 			});
 		}
 	}
+	
+	this.sendChunksIfPossible = function() {
+		var job = this;
+		
+		// Check if we can not send more
+		if (this.sendSize >= this.doneSize + downloadWindowSize) {
+			return;
+		}
+		
+		// Check if send is already scheduled
+		if (!this.sendChunkJob) {
+			// Schedule sending function
+			this.sendChunkJob = setTimeout(function() {job.sendChunksFunc()}, 0);
+		}
+	};
+	
+	this.sendChunkJob = null;
+	
+	this.sendChunksFunc = function() {
+		var job = this;
+		
+		// Check if the job is done
+		if (job.done) {
+			job.sendChunkJob = null;
+			return;
+		}
+		
+		// Check if we can not send more
+		if (job.sendSize >= job.doneSize + downloadWindowSize) {
+			job.sendChunkJob = null;
+			return;
+		}
+		
+		// Allocate buffer
+		var buffer = Buffer.alloc(downloadChunkSize);
+		
+		fs.read(job.file, buffer, 0, downloadChunkSize, null, function(err, bytesRead, buf) {
+			if (err) {
+				// IO error
+				user.emitter.pushEvent('download', 
+						{status:'fail', errorMsg: 'file error', 
+					downloadId: job.id, sendId: job.sendId}).fireEvent();
+				
+				// Remove send job
+				job.sendChunkJob = null;
+				
+				// Finish download job
+				job.finish(new Error('IO Error'));
+			} else {
+				if (bytesRead <= 0) {
+					// Remove send job
+					job.sendChunkJob = null;
+					
+					// Read all bytes, finish download job
+					job.finish(null);
+				} else {
+					let sendBuffer;
+					
+					// Update send size
+					job.sendSize += bytesRead;
+					
+					if (bytesRead < Buffer.length) {
+						sendBuffer = buffer.slice(0, bytesRead);
+					} else {
+						sendBuffer = buffer;
+					}
+					
+					//lib.debug('FIRST 10 bytes ' + buffer.slice(0, 10).toString('hex'));
+					lib.debug('send ' + job.sendSize + ' bytes out of ' + job.size);
+					//lib.debug('send buf size ' + sendBuffer.length);
+					
+					// Send bytes to user
+					user.emitter.pushEvent('download', {status:'success', 
+						downloadId: job.id, sendId: job.sendId, size: job.size, buffer: sendBuffer}).fireEvent();
+					
+					// Check if we can send more
+					if (job.sendSize < job.doneSize + downloadWindowSize) {
+						// Read next bytes
+						job.sendChunkJob = setTimeout(function() {job.sendChunksFunc()}, 0);
+					} else {
+						// End send job
+						job.sendChunkJob = null;
+					}
+				}
+			}
+		});
+	};
 };
 
-uploadJob.prototype = uploadJob;
-downloadJob.prototype = downloadJob;
+uploadJob.prototype = uploadJobProto;
+downloadJob.prototype = downloadJobProto;
 
 var enrollUploadJob = function(user, type, jobCallback, callback) {
 	// Make upload id

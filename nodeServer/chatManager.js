@@ -702,12 +702,22 @@ var init = function(user) {
 		
 		// Get user inputs
 		var groupId = parseInt(data.groupId);
+		var fileName = data.fileName;
 		var fileSendId = parseInt(data.fileSendId);
 		var messageSendId = parseInt(data.messageSendId);
 		var importance = data.importance || 0;
 		lib.debug('send file share message ' + groupId +  ', file send ' + fileSendId + ', message send ' + messageSendId);
 		// Check validity of inputs
-		if (groupId !== groupId || fileSendId !== fileSendId || messageSendId !== messageSendId) {
+		if (groupId !== groupId || fileSendId !== fileSendId || messageSendId !== messageSendId
+				|| fileName !== fileName || typeof(fileName) != 'string') {
+			return;
+		}
+		
+		// Trim file name
+		fileName = fileName.trim();
+		
+		// File length should be greater than zero
+		if (fileName.length == 0) {
 			return;
 		}
 		
@@ -739,7 +749,8 @@ var init = function(user) {
 					user.emitter.pushEvent('sendFileShareMessage', 
 							{status: 'fail', errorMsg: 'failed to upload', uploadId: uploadId}).fireEvent();
 				} else {
-					var content = contentName;
+					var contentJSON = {fileName: fileName, contentName: contentName};
+					var content = JSON.stringify(contentJSON);
 				
 					lib.debug('content name ' + contentName);
 					if (groupId !== groupId)
