@@ -264,6 +264,7 @@ function init(user) {
 				
 				var groupId = this.data.event.groupId;
 				// if event has a group, exit from the group
+				lib.debug('event exit group id ' + groupId);
 				if (groupId) {
 					setTimeout(function() {
 						group.exitGroup({groupId: groupId, user: user, trx: true},
@@ -737,6 +738,8 @@ var eventManager = {
 
 						if (participant.userId == member.userId) {
 							copiedEvent.acked = participant.acked.readUIntLE(0, 1);
+							copiedEvent.groupId = group.groupId;
+							copiedEvent.status = 'success';
 
 							userEvents.push(member.emitter.pushEvent('addGroup', 
 									{status: 'success', group: group}));

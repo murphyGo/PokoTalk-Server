@@ -781,7 +781,7 @@ var exitGroup = dbManager.composablePattern(function(pattern, callback) {
 	function(err, message) {
 		if (err) {
 			lib.debug('failed to exit from group\r\n' + err);
-			return callback(err);
+			return callback(err, null, events);
 		} else {
 			return callback(null, message, events);
 		}

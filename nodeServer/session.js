@@ -412,6 +412,7 @@ var logoutUser = dbManager.composablePattern(function(pattern, oCallback) {
 	// NOTE: Even though we clear event queue and remove user from session pool and chat,
 	// server might try to send some event to this connection which is being handled concurrently.
 	chatManager.leaveAllGroupChat({user: user});
+	locationShare.close(user);
 	removeUserSession(user);
 	user.emitter.clear();
 	
@@ -681,12 +682,13 @@ module.exports = {init: init,
 		removeUserSession: removeUserSession,
 		removeAllUserSession: removeAllUserSession};
 
-var contact = require('./contact');
-var chatManager = require('./chatManager');
-var contentManager = require('./contentManager');
-var event = require('./event');
-var lib = require('./lib');
-var async = require('async');
+const contact = require('./contact');
+const chatManager = require('./chatManager');
+const contentManager = require('./contentManager');
+const event = require('./event');
+const locationShare = require('./locationShare');
+const lib = require('./lib');
+const async = require('async');
 
 if (require.main == module) {
 	console.log('file: ' + __filename + '\ndir: ' + __dirname);

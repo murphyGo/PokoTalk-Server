@@ -88,17 +88,19 @@ io.on('connection', function(user) {
 	chatManager.init(user);
 	event.init(user);
 	contentManager.init(user);
+	locationShare.init(user);
 });
 
 module.exports = {io: io, server: server, app: app};
 
-var async = require('async');
-var dbManager = require('./dbManager');
-var contact = require('./contact');
-var session = require('./session');
-var group = require('./group');
-var event = require('./event');
-var chatManager = require('./chatManager');
-var chat = require('./chat');
-var contentManager = require('./contentManager');
-var lib = require('./lib');
+const async = require('async');
+const dbManager = require('./dbManager');
+const contact = require('./contact');
+const session = require('./session');
+const group = require('./group');
+const event = require('./event');
+const chatManager = require('./chatManager');
+const chat = require('./chat');
+const contentManager = require('./contentManager');
+const locationShare = require('./locationShare');
+const lib = require('./lib');
