@@ -13,6 +13,7 @@ const init = function(user) {
 		
 		// Get user inputs
 		var eventId = parseInt(data.eventId);
+		var number = parseInt(data.number);
 		var sendId = parseInt(data.sendId);
 
 		// Check validity of inputs
@@ -20,8 +21,9 @@ const init = function(user) {
 			return;
 		}
 		
-		// Set send id null if it is NaN
+		// Set data null if it is NaN
 		sendId = sendId !== sendId ? null : sendId;
+		number = number !== number ? null : number;
 		
 		lib.debug('user ' + user.email + ' join location share in event ' + eventId);
 		
@@ -91,7 +93,7 @@ const init = function(user) {
 							eventId: eventId, sendId: sendId});
 			} else {
 				// Add user to room
-				let entry = room.joinMember(user);
+				let entry = room.joinMember(user, number);
 				
 				if (!entry) {
 					// Already joined
@@ -286,7 +288,7 @@ const locationShareRoomProto = {
 			member.emitter.pushEvent('realtimeLocationShareBroadcast', sendData).fireEvent();
 		}
 	},
-	joinMember: function(member) {
+	joinMember: function(member, number) {
 		var memberId = parseInt(member.userId);
 		
 		if (memberId !== memberId) {
@@ -304,7 +306,7 @@ const locationShareRoomProto = {
 		}
 		
 		// Add the user to entries
-		return userEntries.addEntry(member);
+		return userEntries.addEntry(member, number);
 	},
 	exitMember: function(member) {
 		var memberId = parseInt(member.userId);
@@ -341,7 +343,6 @@ const locationShareRoomProto = {
 			// Update member location
 			return entries.updateLocation(member, lat, lng);
 		} else {
-			lib.debug('egg');
 			return false;
 		}
 	},
@@ -383,19 +384,39 @@ const userEntriesProto = {
 		
 		return null;
 	},
-	addEntry: function(user) {
+	addEntry: function(user, number) {
 		var exist = this.findEntry(user);
 		
 		if (exist) {
 			return null;
 		}
 		
-		// Create new entry
-		var entry = {user: user, number: this.entries.length + 1,
-				lat: null, lng: null, timestamp: null};
+		var entry = null;
 		
-		// Push entry to user entries
-		this.entries.push(entry);
+		if (number) {
+			// Search user entry for the number
+			for (var i in this.entries) {
+				var e = this.entries[i];
+				
+				if (e.user && e.number == number 
+						&& e.user.userId == user.userId) {
+					// Found entry
+					entry = e;
+					
+					// Change user object
+					entry.user = user;
+				}
+			}
+		}
+		
+		if (!entry) {
+			// Create new entry
+			entry = {user: user, number: this.entries.length + 1,
+					lat: null, lng: null, timestamp: null};
+			
+			// Push entry to user entries
+			this.entries.push(entry);
+		}
 		
 		return entry;
 	},
@@ -427,7 +448,6 @@ const userEntriesProto = {
 		var lng = parseFloat(lng);
 		
 		if (lat !== lat || lng !== lng) {
-			lib.debug('gg');
 			return false;
 		}
 		
@@ -436,10 +456,8 @@ const userEntriesProto = {
 			entry.lat = lat;
 			entry.lng = lng;
 			entry.timestamp = new Date().getTime();
-			lib.debug('success');
 			return true;
 		} else {
-			lib.debug('aa');
 			return false;
 		}
 	},

@@ -22,12 +22,12 @@ const contentType = {
 	image: {
 		exts: ['jpeg', 'jpg', 'png'],
 		dir: './imageContents',
-		maximumSize: 1024 * 1024
+		maximumSize: 1024 * 1024 * 10
 	},
 	binary: {
 		exts: ['*',],
 		dir: './binaryContents',
-		maximumSize: 1024 * 1024 * 100
+		maximumSize: 1024 * 1024 * 200
 	}
 };
 
@@ -91,11 +91,18 @@ var init = function(user) {
 		
 		var dir = type.dir;
 		var exts = type.exts;
+		var maximumSize = type.maximumSize;
 		
 		// Check if extension is valid
 		if (exts.indexOf('*') < 0 && exts.indexOf(ext) < 0) {
 			return user.emitter.pushEvent('startUpload', 
 					{status:'fail', errorMsg: 'invalid extension'}).fireEvent();
+		}
+		
+		// Check if file size is too big
+		if (size > maximumSize) {
+			return user.emitter.pushEvent('startUpload', 
+					{status:'fail', errorMsg: 'size is too big'}).fireEvent();
 		}
 		
 		// Add extension to content name
